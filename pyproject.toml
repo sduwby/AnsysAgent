@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ansys-agent"
+version = "0.1.0"
+description = "Ansys Maxwell 电机电磁仿真对话助手"
+requires-python = ">=3.10"
+dependencies = [
+    # ansys-aedt-core 仅在 Windows/Linux 上可用，按需手动安装：pip install ansys-aedt-core
+    "openai>=1.30.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    "click>=8.1.0",
+]
+
+[project.scripts]
+ansys-agent = "main:cli"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["."]

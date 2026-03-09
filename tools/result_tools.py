@@ -1,5 +1,5 @@
 """
-Result tools: extract and format Maxwell simulation results via PyAEDT.
+结果工具：通过 PyAEDT 提取和格式化 Maxwell 仿真结果。
 """
 
 from __future__ import annotations
@@ -8,19 +8,19 @@ from tools.maxwell_tools import _app, _ok, _err
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_torque
+# 工具：get_torque - 提取转矩
 # ---------------------------------------------------------------------------
 
 def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> dict:
     """
-    Extract average torque and torque waveform from a transient or magnetostatic solution.
+    从瞬态或磁静态求解结果中提取平均转矩和转矩波形。
 
-    Returns:
-        dict with keys: avg_torque (Nm), waveform (list of [time, torque] pairs)
+    返回:
+        包含 avg_torque（Nm）和 waveform（[时间, 转矩] 列表）的字典
     """
     try:
         app = _app()
-        # For transient: get time-domain torque
+        # 瞬态仿真：获取时域转矩波形
         report = app.post.create_report(
             expressions=["Moving1.Torque"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
@@ -41,7 +41,7 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_back_emf
+# 工具：get_back_emf - 提取反电动势
 # ---------------------------------------------------------------------------
 
 def get_back_emf(
@@ -49,7 +49,7 @@ def get_back_emf(
     setup_name: str = "Setup1",
     sweep_name: str = "LastAdaptive",
 ) -> dict:
-    """Extract back-EMF waveform for a given phase."""
+    """提取指定相的反电动势波形。"""
     try:
         app = _app()
         report = app.post.create_report(
@@ -73,20 +73,20 @@ def get_back_emf(
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_flux_density
+# 工具：get_flux_density - 获取磁通密度
 # ---------------------------------------------------------------------------
 
 def get_flux_density(setup_name: str = "Setup1", point: list[float] | None = None) -> dict:
     """
-    Get the flux density magnitude at a given point (or default to air gap center).
+    获取指定点的磁通密度幅值（默认为气隙中心）。
 
     Args:
-        point: [x, y, z] in mm. Defaults to [0, air_gap_mid, 0].
+        point: [x, y, z]（mm）。未指定时默认 [0, 0, 0]。
     """
     try:
         app = _app()
         if point is None:
-            point = [0, 0, 0]  # Will be set to air gap mid by the agent if needed
+            point = [0, 0, 0]
         field_val = app.post.evaluate_expression(
             expression="Mag_B",
             location=point,
@@ -101,11 +101,11 @@ def get_flux_density(setup_name: str = "Setup1", point: list[float] | None = Non
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_losses
+# 工具：get_losses - 获取损耗
 # ---------------------------------------------------------------------------
 
 def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> dict:
-    """Get iron loss and copper (ohmic) loss totals."""
+    """获取平均铁耗（CoreLoss）和铜耗（OhmicLoss）。"""
     try:
         app = _app()
         expressions = ["CoreLoss", "OhmicLoss"]
@@ -131,16 +131,16 @@ def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
 
 
 # ---------------------------------------------------------------------------
-# Tool: export_results
+# 工具：export_results - 导出结果
 # ---------------------------------------------------------------------------
 
 def export_results(output_path: str, result_type: str = "torque") -> dict:
     """
-    Export simulation results to a CSV file.
+    将仿真结果导出为 CSV 文件。
 
     Args:
-        output_path: full path to output CSV file
-        result_type: "torque" | "back_emf" | "losses"
+        output_path: 输出 CSV 文件的完整路径
+        result_type: "torque"（转矩）| "back_emf"（反电动势）| "losses"（损耗）
     """
     try:
         app = _app()
@@ -151,14 +151,15 @@ def export_results(output_path: str, result_type: str = "torque") -> dict:
         }
         report_name = report_name_map.get(result_type)
         if not report_name:
-            return _err(f"Unknown result type: {result_type}")
+            return _err(f"未知结果类型：{result_type}")
 
-        # Export existing report if available
+        # 检查报告是否已存在（需先调用对应的 get_* 工具）
         all_reports = app.post.all_report_names
         if report_name not in all_reports:
-            return _err(f"Report '{report_name}' not found. Run the corresponding get_* tool first.")
+            return _err(f"报告 '{report_name}' 不存在，请先调用对应的 get_* 工具。")
 
         app.post.export_report_to_file(report_name, output_path)
-        return _ok(f"Results exported to: {output_path}")
+        return _ok(f"结果已导出到：{output_path}")
     except Exception as e:
         return _err(str(e))
+

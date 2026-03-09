@@ -1,25 +1,24 @@
 """
-Maxwell tools: PyAEDT wrappers for motor EM simulation operations.
-Each function returns a dict with 'success', 'result', and optional 'error'.
+Maxwell 工具：PyAEDT 电机电磁仿真操作封装。
+每个函数返回包含 'success'、'result' 和可选 'error' 字段的字典。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
-# PyAEDT is imported lazily to allow the module to load even without Ansys installed.
-_aedt_app = None  # global AEDT Maxwell2d/3d instance
+# PyAEDT 延迟导入，允许在未安装 Ansys 的环境中加载模块
+_aedt_app = None  # 全局 AEDT Maxwell2d/3d 实例
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# 内部辅助函数
 # ---------------------------------------------------------------------------
 
 def _app():
-    """Return the active Maxwell app, raise if not connected."""
+    """返回当前活跃的 Maxwell 应用实例，未连接时抛出异常。"""
     if _aedt_app is None:
-        raise RuntimeError("Not connected to AEDT. Call connect_aedt first.")
+        raise RuntimeError("未连接到 AEDT，请先调用 connect_aedt。")
     return _aedt_app
 
 
@@ -32,17 +31,17 @@ def _err(msg: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tool: connect_aedt
+# 工具：connect_aedt - 连接 AEDT
 # ---------------------------------------------------------------------------
 
 def connect_aedt(version: str = "2024.1", is_3d: bool = False, non_graphical: bool = False) -> dict:
     """
-    Connect to a running AEDT instance or launch a new one.
+    连接到运行中的 AEDT 实例或启动新实例。
 
     Args:
-        version: AEDT version string, e.g. "2024.1"
-        is_3d: True for Maxwell 3D, False for Maxwell 2D
-        non_graphical: Run without GUI (batch mode)
+        version: AEDT 版本号，如 "2024.1"
+        is_3d: True 使用 Maxwell 3D，False 使用 Maxwell 2D
+        non_graphical: 是否无界面运行（批处理模式）
     """
     global _aedt_app
     try:
@@ -60,28 +59,28 @@ def connect_aedt(version: str = "2024.1", is_3d: bool = False, non_graphical: bo
                 non_graphical=non_graphical,
                 new_desktop=False,
             )
-        return _ok(f"Connected to AEDT {version} ({'Maxwell 3D' if is_3d else 'Maxwell 2D'})")
+        return _ok(f"已连接到 AEDT {version}（{'Maxwell 3D' if is_3d else 'Maxwell 2D'}）")
     except Exception as e:
         return _err(str(e))
 
 
 # ---------------------------------------------------------------------------
-# Tool: create_maxwell_project
+# 工具：create_maxwell_project - 创建项目
 # ---------------------------------------------------------------------------
 
 def create_maxwell_project(project_name: str, design_name: str = "Motor") -> dict:
-    """Create a new Maxwell project and design."""
+    """创建新的 Maxwell 项目和设计。"""
     try:
         app = _app()
         app.save_project(project_name)
         app.design_name = design_name
-        return _ok(f"Project '{project_name}' created with design '{design_name}'")
+        return _ok(f"项目 '{project_name}' 已创建，设计名：'{design_name}'")
     except Exception as e:
         return _err(str(e))
 
 
 # ---------------------------------------------------------------------------
-# Tool: create_motor_geometry
+# 工具：create_motor_geometry - 建立电机几何模型
 # ---------------------------------------------------------------------------
 
 def create_motor_geometry(
@@ -95,15 +94,14 @@ def create_motor_geometry(
     stack_length: float = 50.0,
 ) -> dict:
     """
-    Create a simplified PMSM (surface-mounted) geometry in Maxwell 2D.
-
-    All dimensions in mm. Uses PyAEDT primitives.
+    在 Maxwell 2D 中建立表贴式 PMSM 简化几何模型。
+    所有尺寸单位为 mm，使用 PyAEDT 图元接口。
     """
     try:
         app = _app()
         modeler = app.modeler
 
-        # Stator yoke (annulus)
+        # 定子轭部（环形）
         modeler.create_circle(
             position=[0, 0, 0],
             radius=stator_outer_radius,
@@ -120,7 +118,7 @@ def create_motor_geometry(
         modeler.subtract("Stator_Outer", "Stator_Inner_Cut", keep_originals=False)
         modeler.get_object_from_name("Stator_Outer").name = "Stator"
 
-        # Rotor yoke (annulus)
+        # 转子轭部（环形）
         modeler.create_circle(
             position=[0, 0, 0],
             radius=rotor_outer_radius,
@@ -137,7 +135,7 @@ def create_motor_geometry(
         modeler.subtract("Rotor_Outer", "Rotor_Inner_Cut", keep_originals=False)
         modeler.get_object_from_name("Rotor_Outer").name = "Rotor"
 
-        # Air gap region
+        # 气隙区域
         air_gap_outer = rotor_outer_radius + (stator_inner_radius - rotor_outer_radius) / 2
         modeler.create_circle(
             position=[0, 0, 0],
@@ -155,10 +153,10 @@ def create_motor_geometry(
         modeler.subtract("AirGap_Outer", "AirGap_Inner_Cut", keep_originals=False)
         modeler.get_object_from_name("AirGap_Outer").name = "AirGap"
 
-        # Surface magnets (simplified: one magnet per pole, rectangular arc approximation)
+        # 表贴式永磁体（简化：每极一块，弧形近似，磁极弧系数 0.85）
         import math
         pole_angle = 360.0 / num_poles
-        magnet_arc = pole_angle * 0.85  # magnet covers 85% of pole pitch
+        magnet_arc = pole_angle * 0.85
         for i in range(num_poles):
             start_angle = i * pole_angle - magnet_arc / 2
             name = f"Magnet_{i+1}"
@@ -179,30 +177,30 @@ def create_motor_geometry(
             )
 
         return _ok(
-            f"Motor geometry created: {num_slots} slots, {num_poles} poles, "
-            f"stator OD={stator_outer_radius*2}mm, rotor OD={rotor_outer_radius*2}mm"
+            f"电机几何已建立：{num_slots} 槽，{num_poles} 极，"
+            f"定子外径={stator_outer_radius*2}mm，转子外径={rotor_outer_radius*2}mm"
         )
     except Exception as e:
         return _err(str(e))
 
 
 # ---------------------------------------------------------------------------
-# Tool: assign_material
+# 工具：assign_material - 赋予材料
 # ---------------------------------------------------------------------------
 
 def assign_material(object_name: str, material_name: str) -> dict:
-    """Assign a material to a geometry object."""
+    """为几何体对象赋予材料。"""
     try:
         app = _app()
         obj = app.modeler.get_object_from_name(object_name)
         obj.material_name = material_name
-        return _ok(f"Assigned material '{material_name}' to '{object_name}'")
+        return _ok(f"已将材料 '{material_name}' 赋予 '{object_name}'")
     except Exception as e:
         return _err(str(e))
 
 
 # ---------------------------------------------------------------------------
-# Tool: setup_winding
+# 工具：setup_winding - 配置绕组激励
 # ---------------------------------------------------------------------------
 
 def setup_winding(
@@ -213,14 +211,14 @@ def setup_winding(
     phase_angle: float = 0.0,
 ) -> dict:
     """
-    Set up a winding phase excitation.
+    配置绕组相激励。
 
     Args:
-        phase_name: e.g. "PhaseA"
-        conductor_names: list of slot conductor object names
-        current_amplitude: peak current in A
-        frequency: electrical frequency in Hz (0 for magnetostatic)
-        phase_angle: phase angle in degrees
+        phase_name: 相名称，如 "PhaseA"
+        conductor_names: 槽内导体对象名称列表
+        current_amplitude: 峰值电流（A）
+        frequency: 电频率（Hz），磁静态仿真置 0
+        phase_angle: 相位角（度）
     """
     try:
         app = _app()
@@ -236,13 +234,13 @@ def setup_winding(
             current_value=f"{current_amplitude}A",
             phase_angle=f"{phase_angle}deg",
         )
-        return _ok(f"Winding '{phase_name}' configured: {current_amplitude}A @ {phase_angle}°")
+        return _ok(f"绕组 '{phase_name}' 已配置：{current_amplitude}A @ {phase_angle}°")
     except Exception as e:
         return _err(str(e))
 
 
 # ---------------------------------------------------------------------------
-# Tool: add_solution_setup
+# 工具：add_solution_setup - 添加求解设置
 # ---------------------------------------------------------------------------
 
 def add_solution_setup(
@@ -252,13 +250,13 @@ def add_solution_setup(
     num_passes: int = 10,
 ) -> dict:
     """
-    Add a solution setup.
+    添加求解设置。
 
     Args:
-        solver_type: "Transient" | "Magnetostatic" | "EddyCurrent"
-        stop_time: simulation stop time in seconds (transient only)
-        time_step: time step in seconds (transient only)
-        num_passes: adaptive mesh passes
+        solver_type: "Transient"（瞬态）| "Magnetostatic"（磁静态）| "EddyCurrent"（涡流）
+        stop_time: 仿真结束时间（秒，瞬态专用）
+        time_step: 时间步长（秒，瞬态专用）
+        num_passes: 自适应网格剖分最大迭代次数
     """
     try:
         app = _app()
@@ -276,21 +274,21 @@ def add_solution_setup(
             setup.props["MaximumPasses"] = num_passes
             setup.update()
         else:
-            return _err(f"Unknown solver type: {solver_type}")
-        return _ok(f"Solution setup added: {solver_type}")
+            return _err(f"未知求解器类型：{solver_type}")
+        return _ok(f"求解设置已添加：{solver_type}")
     except Exception as e:
         return _err(str(e))
 
 
 # ---------------------------------------------------------------------------
-# Tool: run_simulation
+# 工具：run_simulation - 运行仿真
 # ---------------------------------------------------------------------------
 
 def run_simulation(setup_name: str = "Setup1") -> dict:
-    """Analyze (run) the specified setup."""
+    """运行（求解）指定设置的仿真。"""
     try:
         app = _app()
         app.analyze_setup(setup_name)
-        return _ok(f"Simulation '{setup_name}' completed successfully")
+        return _ok(f"仿真 '{setup_name}' 已完成")
     except Exception as e:
         return _err(str(e))

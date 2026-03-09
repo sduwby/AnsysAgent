@@ -1,5 +1,5 @@
 """
-Chat agent: main conversation loop with tool-use support via Anthropic Claude.
+对话 Agent：基于 DeepSeek（OpenAI 兼容接口）的主对话循环，支持工具调用。
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import json
 import os
 from typing import Any
 
-import anthropic
+from openai import OpenAI
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -18,8 +18,13 @@ from tools import maxwell_tools, result_tools
 
 console = Console()
 
+# DeepSeek API 配置
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_API_KEY = "sk-00c8bde0c3124692907b0a97672cde25"
+
 # ---------------------------------------------------------------------------
-# Tool registry: maps tool name -> callable
+# 工具注册表：工具名 -> 可调用函数
 # ---------------------------------------------------------------------------
 
 TOOL_REGISTRY: dict[str, callable] = {
@@ -38,179 +43,219 @@ TOOL_REGISTRY: dict[str, callable] = {
 }
 
 # ---------------------------------------------------------------------------
-# Tool definitions for Claude API
+# 工具定义（OpenAI function calling 格式，DeepSeek 兼容）
 # ---------------------------------------------------------------------------
 
 TOOL_DEFINITIONS = [
     {
-        "name": "connect_aedt",
-        "description": "Connect to a running AEDT instance or launch a new one.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "version": {"type": "string", "description": "AEDT version, e.g. '2024.1'"},
-                "is_3d": {"type": "boolean", "description": "True for Maxwell 3D, False for Maxwell 2D"},
-                "non_graphical": {"type": "boolean", "description": "Run without GUI"},
+        "type": "function",
+        "function": {
+            "name": "connect_aedt",
+            "description": "连接到运行中的 AEDT 实例或启动新实例。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "AEDT 版本号，如 '2024.1'"},
+                    "is_3d": {"type": "boolean", "description": "True 使用 Maxwell 3D，False 使用 Maxwell 2D"},
+                    "non_graphical": {"type": "boolean", "description": "是否无界面运行（批处理模式）"},
+                },
             },
         },
     },
     {
-        "name": "create_maxwell_project",
-        "description": "Create a new Maxwell 2D/3D project and design.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "project_name": {"type": "string"},
-                "design_name": {"type": "string"},
-            },
-            "required": ["project_name"],
-        },
-    },
-    {
-        "name": "create_motor_geometry",
-        "description": "Build PMSM motor geometry in Maxwell 2D (stator, rotor, magnets, air gap).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "stator_outer_radius": {"type": "number", "description": "mm"},
-                "stator_inner_radius": {"type": "number", "description": "mm"},
-                "rotor_outer_radius": {"type": "number", "description": "mm"},
-                "rotor_inner_radius": {"type": "number", "description": "mm"},
-                "num_slots": {"type": "integer"},
-                "num_poles": {"type": "integer"},
-                "magnet_thickness": {"type": "number", "description": "mm"},
-                "stack_length": {"type": "number", "description": "mm, axial length"},
-            },
-            "required": [
-                "stator_outer_radius", "stator_inner_radius",
-                "rotor_outer_radius", "rotor_inner_radius",
-                "num_slots", "num_poles", "magnet_thickness",
-            ],
-        },
-    },
-    {
-        "name": "assign_material",
-        "description": "Assign a material to a geometry object.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "object_name": {"type": "string"},
-                "material_name": {"type": "string"},
-            },
-            "required": ["object_name", "material_name"],
-        },
-    },
-    {
-        "name": "setup_winding",
-        "description": "Configure a winding phase excitation.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "phase_name": {"type": "string"},
-                "conductor_names": {"type": "array", "items": {"type": "string"}},
-                "current_amplitude": {"type": "number", "description": "Peak current in A"},
-                "frequency": {"type": "number", "description": "Electrical frequency in Hz"},
-                "phase_angle": {"type": "number", "description": "Phase angle in degrees"},
-            },
-            "required": ["phase_name", "conductor_names", "current_amplitude"],
-        },
-    },
-    {
-        "name": "add_solution_setup",
-        "description": "Add a solver setup (Transient / Magnetostatic / EddyCurrent).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "solver_type": {"type": "string", "enum": ["Transient", "Magnetostatic", "EddyCurrent"]},
-                "stop_time": {"type": "number", "description": "seconds"},
-                "time_step": {"type": "number", "description": "seconds"},
-                "num_passes": {"type": "integer"},
+        "type": "function",
+        "function": {
+            "name": "create_maxwell_project",
+            "description": "创建新的 Maxwell 2D/3D 项目和设计。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "项目名称"},
+                    "design_name": {"type": "string", "description": "设计名称"},
+                },
+                "required": ["project_name"],
             },
         },
     },
     {
-        "name": "run_simulation",
-        "description": "Run (analyze) the simulation.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "setup_name": {"type": "string"},
+        "type": "function",
+        "function": {
+            "name": "create_motor_geometry",
+            "description": "在 Maxwell 2D 中建立 PMSM 电机几何模型（定子、转子、永磁体、气隙）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stator_outer_radius": {"type": "number", "description": "定子外径（mm）"},
+                    "stator_inner_radius": {"type": "number", "description": "定子内径（mm）"},
+                    "rotor_outer_radius": {"type": "number", "description": "转子外径（mm）"},
+                    "rotor_inner_radius": {"type": "number", "description": "转子内径（mm）"},
+                    "num_slots": {"type": "integer", "description": "定子槽数"},
+                    "num_poles": {"type": "integer", "description": "极数"},
+                    "magnet_thickness": {"type": "number", "description": "永磁体厚度（mm）"},
+                    "stack_length": {"type": "number", "description": "轴向叠片长度（mm）"},
+                },
+                "required": [
+                    "stator_outer_radius", "stator_inner_radius",
+                    "rotor_outer_radius", "rotor_inner_radius",
+                    "num_slots", "num_poles", "magnet_thickness",
+                ],
             },
         },
     },
     {
-        "name": "get_torque",
-        "description": "Extract average torque and torque waveform.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "setup_name": {"type": "string"},
-                "sweep_name": {"type": "string"},
+        "type": "function",
+        "function": {
+            "name": "assign_material",
+            "description": "为几何体对象赋予材料。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "object_name": {"type": "string", "description": "几何体名称"},
+                    "material_name": {"type": "string", "description": "材料名称（需在 AEDT 材料库中存在）"},
+                },
+                "required": ["object_name", "material_name"],
             },
         },
     },
     {
-        "name": "get_back_emf",
-        "description": "Extract back-EMF waveform for a phase.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "phase_name": {"type": "string"},
-                "setup_name": {"type": "string"},
+        "type": "function",
+        "function": {
+            "name": "setup_winding",
+            "description": "配置绕组相激励。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phase_name": {"type": "string", "description": "相名称，如 PhaseA"},
+                    "conductor_names": {"type": "array", "items": {"type": "string"}, "description": "导体对象名称列表"},
+                    "current_amplitude": {"type": "number", "description": "峰值电流（A）"},
+                    "frequency": {"type": "number", "description": "电频率（Hz），磁静态置 0"},
+                    "phase_angle": {"type": "number", "description": "相位角（度）"},
+                },
+                "required": ["phase_name", "conductor_names", "current_amplitude"],
             },
         },
     },
     {
-        "name": "get_flux_density",
-        "description": "Get flux density at a point.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "setup_name": {"type": "string"},
-                "point": {"type": "array", "items": {"type": "number"}, "description": "[x, y, z] mm"},
+        "type": "function",
+        "function": {
+            "name": "add_solution_setup",
+            "description": "添加求解设置（瞬态 / 磁静态 / 涡流）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "solver_type": {"type": "string", "enum": ["Transient", "Magnetostatic", "EddyCurrent"], "description": "求解器类型"},
+                    "stop_time": {"type": "number", "description": "仿真结束时间（秒，瞬态专用）"},
+                    "time_step": {"type": "number", "description": "时间步长（秒，瞬态专用）"},
+                    "num_passes": {"type": "integer", "description": "自适应网格剖分最大迭代次数"},
+                },
             },
         },
     },
     {
-        "name": "get_losses",
-        "description": "Get average iron and copper losses.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "setup_name": {"type": "string"},
+        "type": "function",
+        "function": {
+            "name": "run_simulation",
+            "description": "运行（求解）仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                },
             },
         },
     },
     {
-        "name": "export_results",
-        "description": "Export results to CSV.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "output_path": {"type": "string"},
-                "result_type": {"type": "string", "enum": ["torque", "back_emf", "losses"]},
+        "type": "function",
+        "function": {
+            "name": "get_torque",
+            "description": "提取平均转矩和转矩波形。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                    "sweep_name": {"type": "string"},
+                },
             },
-            "required": ["output_path"],
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_back_emf",
+            "description": "提取指定相的反电动势波形。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phase_name": {"type": "string", "description": "相名称，如 PhaseA"},
+                    "setup_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_flux_density",
+            "description": "获取指定点的磁通密度幅值。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                    "point": {"type": "array", "items": {"type": "number"}, "description": "[x, y, z]（mm）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_losses",
+            "description": "获取平均铁耗和铜耗。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_results",
+            "description": "将仿真结果导出为 CSV 文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出文件路径"},
+                    "result_type": {"type": "string", "enum": ["torque", "back_emf", "losses"], "description": "结果类型"},
+                },
+                "required": ["output_path"],
+            },
         },
     },
 ]
 
 
 # ---------------------------------------------------------------------------
-# ChatAgent class
+# ChatAgent 主类
 # ---------------------------------------------------------------------------
 
 class ChatAgent:
-    def __init__(self, model: str = "claude-opus-4-5"):
-        self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        self.model = model
+    def __init__(self):
+        # 初始化 DeepSeek 客户端（OpenAI 兼容接口）
+        self.client = OpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url=DEEPSEEK_BASE_URL,
+        )
+        self.model = DEEPSEEK_MODEL
         self.history: list[dict] = []
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
-        """Execute a tool and return its result as a JSON string."""
+        """执行指定工具，返回 JSON 字符串结果。"""
         fn = TOOL_REGISTRY.get(tool_name)
         if fn is None:
-            return json.dumps({"success": False, "error": f"Unknown tool: {tool_name}"})
+            return json.dumps({"success": False, "error": f"未知工具: {tool_name}"})
         try:
             result = fn(**tool_input)
             return json.dumps(result, ensure_ascii=False)
@@ -218,58 +263,105 @@ class ChatAgent:
             return json.dumps({"success": False, "error": str(e)})
 
     def chat(self, user_message: str) -> str:
-        """Send a user message and return the final assistant response."""
+        """发送用户消息，返回最终 Assistant 回复（非流式）。"""
         self.history.append({"role": "user", "content": user_message})
 
         while True:
-            response = self.client.messages.create(
+            # 调用 DeepSeek API
+            response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
                 tools=TOOL_DEFINITIONS,
-                messages=self.history,
+                tool_choice="auto",
             )
 
-            # Collect assistant content blocks
-            assistant_content = []
-            for block in response.content:
-                if block.type == "text":
-                    assistant_content.append({"type": "text", "text": block.text})
-                elif block.type == "tool_use":
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
+            msg = response.choices[0].message
 
-            self.history.append({"role": "assistant", "content": assistant_content})
+            # 将 assistant 消息加入历史
+            self.history.append(msg.model_dump(exclude_unset=False))
 
-            # If no tool calls, we're done
-            if response.stop_reason != "tool_use":
-                final_text = ""
-                for block in response.content:
-                    if block.type == "text":
-                        final_text += block.text
-                return final_text
+            # 没有工具调用，直接返回文本
+            if not msg.tool_calls:
+                return msg.content or ""
 
-            # Execute all tool calls
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                console.print(f"[dim]🔧 Calling tool: [bold]{block.name}[/bold] {json.dumps(block.input, ensure_ascii=False)}[/dim]")
-                result_str = self._execute_tool(block.name, block.input)
+            # 执行所有工具调用
+            for tool_call in msg.tool_calls:
+                fn_name = tool_call.function.name
+                fn_args = json.loads(tool_call.function.arguments)
+                console.print(
+                    f"[dim]🔧 调用工具: [bold]{fn_name}[/bold] "
+                    f"{json.dumps(fn_args, ensure_ascii=False)}[/dim]"
+                )
+                result_str = self._execute_tool(fn_name, fn_args)
                 result_data = json.loads(result_str)
                 if result_data.get("success"):
                     console.print(f"[green]  ✓ {result_data.get('result', 'OK')}[/green]")
                 else:
-                    console.print(f"[red]  ✗ {result_data.get('error', 'Error')}[/red]")
+                    console.print(f"[red]  ✗ {result_data.get('error', '错误')}[/red]")
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
+                # 将工具结果追加到历史
+                self.history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
                     "content": result_str,
                 })
 
-            self.history.append({"role": "user", "content": tool_results})
+    def chat_stream(self, user_message: str):
+        """
+        流式对话：生成器，逐 token yield 文本片段。
+        工具调用期间会 yield 特殊前缀 '\r\x00TOOL\x00' 开头的状态行。
+        """
+        self.history.append({"role": "user", "content": user_message})
+
+        while True:
+            # 检查是否有工具调用待处理（上一轮留下的）
+            # 先用非流式做工具调用处理，只在最终回复时流式输出
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=4096,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+            )
+
+            msg = response.choices[0].message
+            self.history.append(msg.model_dump(exclude_unset=False))
+
+            if not msg.tool_calls:
+                # 最终回复：用流式重新请求以获得逐 token 输出
+                # 先从历史中移除刚刚添加的非流式回复
+                self.history.pop()
+                stream = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                    stream=True,
+                )
+                full_text = ""
+                for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        full_text += delta.content
+                        yield delta.content
+                # 将完整回复存入历史
+                self.history.append({"role": "assistant", "content": full_text})
+                return
+
+            # 有工具调用：通知调用方，执行工具
+            for tool_call in msg.tool_calls:
+                fn_name = tool_call.function.name
+                fn_args = json.loads(tool_call.function.arguments)
+                yield f"\x00TOOL\x00{fn_name}:{json.dumps(fn_args, ensure_ascii=False)}"
+
+                result_str = self._execute_tool(fn_name, fn_args)
+                result_data = json.loads(result_str)
+                status = "✓" if result_data.get("success") else "✗"
+                detail = result_data.get("result") or result_data.get("error") or ""
+                yield f"\x00TOOL_RESULT\x00{status} {detail}"
+
+                self.history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_str,
+                })
