@@ -14,7 +14,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from agent.prompt import SYSTEM_PROMPT
-from tools import maxwell_tools, result_tools
+from tools import maxwell_tools, result_tools, optislang_tools
 
 console = Console()
 
@@ -40,6 +40,16 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_flux_density": result_tools.get_flux_density,
     "get_losses": result_tools.get_losses,
     "export_results": result_tools.export_results,
+    # optiSLang 工具
+    "connect_optislang": optislang_tools.connect_optislang,
+    "create_optimization_project": optislang_tools.create_optimization_project,
+    "add_design_variable": optislang_tools.add_design_variable,
+    "add_response": optislang_tools.add_response,
+    "run_sensitivity_study": optislang_tools.run_sensitivity_study,
+    "run_optimization": optislang_tools.run_optimization,
+    "get_optimization_results": optislang_tools.get_optimization_results,
+    "get_sensitivity_results": optislang_tools.get_sensitivity_results,
+    "disconnect_optislang": optislang_tools.disconnect_optislang,
 }
 
 # ---------------------------------------------------------------------------
@@ -232,6 +242,127 @@ TOOL_DEFINITIONS = [
                 },
                 "required": ["output_path"],
             },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # optiSLang 工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_optislang",
+            "description": "连接到运行中的 optiSLang 实例。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "host": {"type": "string", "description": "主机名，默认 localhost"},
+                    "port": {"type": "integer", "description": "gRPC 端口，默认 5310"},
+                    "timeout": {"type": "integer", "description": "连接超时（秒）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_optimization_project",
+            "description": "创建新的 optiSLang 优化项目，选择优化算法。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "项目名称"},
+                    "algorithm": {"type": "string", "enum": ["ARSM", "NLPQL", "EA", "OMSTSP"], "description": "优化算法"},
+                    "max_iterations": {"type": "integer", "description": "最大迭代次数"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_design_variable",
+            "description": "添加优化设计变量，设定取值范围。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "变量名（与 AEDT 参数名一致）"},
+                    "lower_bound": {"type": "number", "description": "下限"},
+                    "upper_bound": {"type": "number", "description": "上限"},
+                    "initial_value": {"type": "number", "description": "初始值"},
+                },
+                "required": ["name", "lower_bound", "upper_bound"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_response",
+            "description": "添加优化响应（目标函数或约束条件）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "响应名称（仿真输出变量名）"},
+                    "response_type": {"type": "string", "enum": ["objective", "constraint"], "description": "类型"},
+                    "target": {"type": "string", "enum": ["minimize", "maximize"], "description": "优化方向（仅 objective）"},
+                    "limit": {"type": "number", "description": "约束限值（仅 constraint）"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_sensitivity_study",
+            "description": "运行参数敏感性分析，识别关键设计变量。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "num_designs": {"type": "integer", "description": "采样设计点数量"},
+                    "method": {"type": "string", "enum": ["MOP", "LHS", "SOBOL"], "description": "敏感性方法"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_optimization",
+            "description": "启动参数优化运行。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "algorithm": {"type": "string", "enum": ["ARSM", "NLPQL", "EA", "OMSTSP"], "description": "优化算法"},
+                    "max_iterations": {"type": "integer", "description": "最大迭代次数"},
+                    "num_parallel_runs": {"type": "integer", "description": "并行仿真数量"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_optimization_results",
+            "description": "获取优化完成后的最优设计参数和目标值。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sensitivity_results",
+            "description": "获取敏感性分析结果，返回各参数对响应的影响系数。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "disconnect_optislang",
+            "description": "断开与 optiSLang 的连接并释放资源。",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
