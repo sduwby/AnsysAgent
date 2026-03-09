@@ -1,0 +1,9 @@
+# Ansys PyAEDT - Electronics Desktop Python API
+ansys-aedt-core>=0.13.0
+
+# LLM client
+anthropic>=0.40.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.0.0          # 终端格式化输出
