@@ -1,5 +1,6 @@
-# Ansys PyAEDT - Electronics Desktop Python 接口
-ansys-aedt-core>=0.13.0
+# Ansys PyAEDT - Electronics Desktop Python 接口（仅 Windows/Linux 可用）
+# pip install ansys-aedt-core
+# ansys-aedt-core>=0.13.0
 
 # LLM 客户端（使用 OpenAI 兼容接口，对接 DeepSeek）
 openai>=1.30.0
