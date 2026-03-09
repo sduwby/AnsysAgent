@@ -14,7 +14,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from agent.prompt import SYSTEM_PROMPT
-from tools import maxwell_tools, result_tools, optislang_tools
+from tools import maxwell_tools, result_tools, optislang_tools, icepak_tools, circuit_tools, mechanical_tools, sweep_tools, report_tools
 
 console = Console()
 
@@ -50,6 +50,32 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_optimization_results": optislang_tools.get_optimization_results,
     "get_sensitivity_results": optislang_tools.get_sensitivity_results,
     "disconnect_optislang": optislang_tools.disconnect_optislang,
+    # Icepak 热分析工具
+    "connect_icepak": icepak_tools.connect_icepak,
+    "setup_motor_thermal": icepak_tools.setup_motor_thermal,
+    "run_thermal_simulation": icepak_tools.run_thermal_simulation,
+    "get_temperature_results": icepak_tools.get_temperature_results,
+    # Maxwell Circuit 驱动器联仿工具
+    "connect_circuit": circuit_tools.connect_circuit,
+    "create_inverter_circuit": circuit_tools.create_inverter_circuit,
+    "link_maxwell_to_circuit": circuit_tools.link_maxwell_to_circuit,
+    "run_circuit_simulation": circuit_tools.run_circuit_simulation,
+    "get_circuit_results": circuit_tools.get_circuit_results,
+    # Mechanical 结构振动工具
+    "connect_mechanical": mechanical_tools.connect_mechanical,
+    "import_maxwell_forces": mechanical_tools.import_maxwell_forces,
+    "run_modal_analysis": mechanical_tools.run_modal_analysis,
+    "run_harmonic_analysis": mechanical_tools.run_harmonic_analysis,
+    "get_vibration_results": mechanical_tools.get_vibration_results,
+    # 参数化扫描工具
+    "add_parametric_variable": sweep_tools.add_parametric_variable,
+    "create_parametric_sweep": sweep_tools.create_parametric_sweep,
+    "run_parametric_sweep": sweep_tools.run_parametric_sweep,
+    "get_sweep_results": sweep_tools.get_sweep_results,
+    "create_2d_sweep": sweep_tools.create_2d_sweep,
+    # 报告生成工具
+    "generate_report": report_tools.generate_report,
+    "export_aedt_report": report_tools.export_aedt_report,
 }
 
 # ---------------------------------------------------------------------------
@@ -363,6 +389,308 @@ TOOL_DEFINITIONS = [
             "name": "disconnect_optislang",
             "description": "断开与 optiSLang 的连接并释放资源。",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # Icepak 热分析工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_icepak",
+            "description": "连接到 AEDT Icepak 热仿真实例。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "AEDT 版本，如 '2024.1'"},
+                    "non_graphical": {"type": "boolean"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_motor_thermal",
+            "description": "设置电机热分析边界条件（铜耗/铁耗热源和冷却方式）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "copper_loss_W": {"type": "number", "description": "绕组铜耗（W）"},
+                    "iron_loss_W": {"type": "number", "description": "铁芯铁耗（W）"},
+                    "ambient_temp_C": {"type": "number", "description": "环境温度（°C）"},
+                    "cooling_type": {"type": "string", "enum": ["natural_convection", "forced_convection", "water_jacket"]},
+                },
+                "required": ["copper_loss_W", "iron_loss_W"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_thermal_simulation",
+            "description": "运行 Icepak 稳态热仿真。",
+            "parameters": {"type": "object", "properties": {"setup_name": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_temperature_results",
+            "description": "获取各部件（绕组/定子/转子）的最高和平均温度。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "object_names": {"type": "array", "items": {"type": "string"}, "description": "几何体名称列表"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # Maxwell Circuit 驱动器联仿工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_circuit",
+            "description": "连接到 Maxwell Circuit Editor。",
+            "parameters": {"type": "object", "properties": {"version": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_inverter_circuit",
+            "description": "创建三相两电平 IGBT 逆变器拓扑电路。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dc_voltage_V": {"type": "number", "description": "直流母线电压（V）"},
+                    "switching_freq_Hz": {"type": "number", "description": "开关频率（Hz）"},
+                    "dead_time_us": {"type": "number", "description": "死区时间（μs）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "link_maxwell_to_circuit",
+            "description": "将 Maxwell 电机设计动态链接到 Circuit，实现驱动器+电机联合仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "maxwell_design_name": {"type": "string", "description": "Maxwell 设计名称"},
+                },
+                "required": ["maxwell_design_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_circuit_simulation",
+            "description": "运行驱动器+电机联合瞬态仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stop_time_ms": {"type": "number", "description": "总仿真时间（ms）"},
+                    "time_step_us": {"type": "number", "description": "时间步（μs）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_circuit_results",
+            "description": "提取电路仿真波形（相电流、母线电压等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "signals": {"type": "array", "items": {"type": "string"}, "description": "信号名列表"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # Mechanical 结构振动工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_mechanical",
+            "description": "连接到 Ansys Mechanical 实例。",
+            "parameters": {"type": "object", "properties": {"version": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_maxwell_forces",
+            "description": "将 Maxwell 电磁力导入 Mechanical 作为激励（用于 NVH 分析）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "maxwell_project_path": {"type": "string", "description": "Maxwell 项目路径（.aedt）"},
+                    "setup_name": {"type": "string"},
+                },
+                "required": ["maxwell_project_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_modal_analysis",
+            "description": "运行电机模态分析，提取固有频率和振型。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "num_modes": {"type": "integer", "description": "提取模态阶数"},
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "description": "[f_min, f_max] Hz"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_harmonic_analysis",
+            "description": "运行谐响应分析（NVH），评估电机振动噪声。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "description": "[f_min, f_max] Hz"},
+                    "num_steps": {"type": "integer"},
+                    "damping_ratio": {"type": "number"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_vibration_results",
+            "description": "获取固有频率列表和振动结果。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 参数化扫描工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "add_parametric_variable",
+            "description": "在 Maxwell 设计中添加参数化变量。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "变量名"},
+                    "value": {"type": "number", "description": "初始值"},
+                    "unit": {"type": "string", "description": "单位，如 mm、deg、A"},
+                },
+                "required": ["name", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_parametric_sweep",
+            "description": "创建单参数线性扫描（start 到 stop，步长 step）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "param_name": {"type": "string"},
+                    "start": {"type": "number"},
+                    "stop": {"type": "number"},
+                    "step": {"type": "number"},
+                    "setup_name": {"type": "string"},
+                },
+                "required": ["param_name", "start", "stop", "step"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_parametric_sweep",
+            "description": "执行参数化扫描仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {"sweep_name": {"type": "string", "description": "扫描名称，空则运行全部"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sweep_results",
+            "description": "提取参数扫描结果，返回参数-结果映射及最优点。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "param_name": {"type": "string"},
+                    "result_expression": {"type": "string", "description": "结果表达式，如 Torque、CoreLoss"},
+                    "sweep_name": {"type": "string"},
+                },
+                "required": ["param_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_2d_sweep",
+            "description": "创建二维参数扫描（两个参数的笛卡尔积），适合效率 MAP。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "param1_name": {"type": "string"},
+                    "param1_values": {"type": "array", "items": {"type": "number"}},
+                    "param2_name": {"type": "string"},
+                    "param2_values": {"type": "array", "items": {"type": "number"}},
+                    "setup_name": {"type": "string"},
+                },
+                "required": ["param1_name", "param1_values", "param2_name", "param2_values"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 报告生成工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_report",
+            "description": "生成电机仿真 HTML/Markdown 报告，汇总所有结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "报告输出路径"},
+                    "motor_name": {"type": "string", "description": "电机名称"},
+                    "results": {"type": "object", "description": "仿真结果字典（转矩/损耗/温度等）"},
+                    "format": {"type": "string", "enum": ["html", "markdown"], "description": "报告格式"},
+                },
+                "required": ["output_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_aedt_report",
+            "description": "将 AEDT 中已有的所有 Report 导出为 CSV 和图片。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_dir": {"type": "string", "description": "输出目录"},
+                    "report_names": {"type": "array", "items": {"type": "string"}, "description": "指定报告名，None 则导出全部"},
+                },
+                "required": ["output_dir"],
+            },
         },
     },
 ]
