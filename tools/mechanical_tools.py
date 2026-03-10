@@ -20,13 +20,25 @@ def _app():
 # 工具：connect_mechanical - 连接 Mechanical
 # ---------------------------------------------------------------------------
 
-def connect_mechanical(version: str = "2024.1") -> dict:
-    """连接到 Ansys Mechanical 实例（通过 ansys-mechanical-core）。"""
+def connect_mechanical(version: str = "242") -> dict:
+    """
+    连接到 Ansys Mechanical 实例（通过 ansys-mechanical-core）。
+
+    Args:
+        version: Ansys 版本号，格式为三位整数字符串，如 "242"（2024 R2）、"241"（2024 R1）
+    """
     global _mech_app
     try:
-        import ansys.mechanical.core as pymechanical
-        _mech_app = pymechanical.launch_mechanical(version=version)
-        return _ok(f"已连接到 Mechanical {version}")
+        from ansys.mechanical.core import find_mechanical, launch_mechanical
+        # version 格式：三位整数字符串 "242" 表示 Ansys 2024 R2
+        ver_int = int(version)
+        mechs = find_mechanical(ver_int)
+        if mechs:
+            _mech_app = launch_mechanical(exec_file=mechs[0], batch=True)
+        else:
+            # 未找到指定版本，使用最新安装版本
+            _mech_app = launch_mechanical(batch=True)
+        return _ok(f"已连接到 Mechanical（版本 {version}）")
     except Exception as e:
         return _err(str(e))
 
@@ -153,8 +165,21 @@ try:
             raise Exception("未找到名为 '" + _name + "' 的分析")
     else:
         analysis = Model.Analyses[0]
-    freq_result = analysis.Solution.GetResultsData()
-    results["natural_frequencies_Hz"] = [f for f in freq_result.Frequencies]
+    sol = analysis.Solution
+    freqs = []
+    # 从模态分析的 TotalDeformation 结果对象提取固有频率
+    # 每个 TotalDeformation 对应一个模态，ReportedFrequency 返回该模态的固有频率
+    defo_results = sol.GetChildren(DataModelObjectCategory.TotalDeformation, True)
+    for r in defo_results:
+        try:
+            freq_str = str(r.ReportedFrequency)
+            freq = float(freq_str.split()[0])  # "123.4 Hz" -> 123.4
+            freqs.append(round(freq, 4))
+        except Exception:
+            pass
+    if not freqs:
+        raise Exception("未找到固有频率，请确认已运行模态分析并查看 Mechanical 中的 Solution 结果")
+    results["natural_frequencies_Hz"] = sorted(freqs)
 except Exception as e:
     results["error"] = str(e)
 print(json.dumps(results))

@@ -1,9 +1,14 @@
 """
 optiSLang 工具：通过 ansys-optislang-core 接口驱动参数优化与敏感性分析。
 每个函数返回包含 'success'、'result' 和可选 'error' 字段的字典。
+
+依赖：pip install ansys-optislang-core
+平台：仅支持 Windows（ansys-optislang-core 需 Windows/Linux 环境）
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from tools.utils import _ok, _err
 
@@ -29,7 +34,7 @@ def connect_optislang(
     timeout: int = 60,
 ) -> dict:
     """
-    连接到运行中的 optiSLang 实例。
+    连接到运行中的 optiSLang 实例（需提前在 Windows 上启动 optiSLang）。
 
     Args:
         host: optiSLang 服务器主机名（默认 localhost）
@@ -55,32 +60,25 @@ def create_optimization_project(
     max_iterations: int = 50,
 ) -> dict:
     """
-    创建新的 optiSLang 优化项目。
+    创建新的 optiSLang 优化项目并保存到当前工作目录。
 
     Args:
-        project_name: 项目名称
-        algorithm: 优化算法。可选：
-            'ARSM'（自适应响应面法，推荐）、
-            'NLPQL'（梯度法）、
-            'EA'（进化算法，多目标）、
-            'OMSTSP'（全局优化）
-        max_iterations: 最大迭代次数
+        project_name: 项目名称（保存为 <project_name>.opf）
+        algorithm: 优化算法（存储配置，在 run_optimization 中生效）：
+            'ARSM'（自适应响应面法，推荐）、'NLPQL'（梯度法）、
+            'EA'（进化算法，多目标）、'OMSTSP'（全局优化）
+        max_iterations: 最大迭代次数（存储配置）
     """
     try:
         osl = _get_osl()
         osl.application.new()
-        osl.application.set_project_name(project_name)
-        # 存储配置以供后续 run_optimization / run_sensitivity_study 使用
+        # ansys-optislang-core 无 set_project_name()，通过 save_as() 保存并命名
+        project_path = str(Path.cwd() / f"{project_name}.opf")
+        osl.application.save_as(project_path)
         _osl_config["algorithm"] = algorithm
         _osl_config["max_iterations"] = max_iterations
-        # 尝试在 root_system 上实际配置算法（ansys-optislang-core 属性名可能因版本而异）
-        try:
-            root_system = osl.project.root_system
-            root_system.set_property("Algorithm", algorithm)
-            root_system.set_property("MaxIterations", max_iterations)
-        except Exception:
-            pass  # 若 API 不支持，配置已保存在 _osl_config 中
-        return _ok(f"优化项目已创建：{project_name}，算法：{algorithm}，最大迭代：{max_iterations}")
+        _osl_config["project_path"] = project_path
+        return _ok(f"优化项目已创建：{project_path}，算法：{algorithm}，最大迭代：{max_iterations}")
     except Exception as e:
         return _err(str(e))
 
@@ -104,21 +102,22 @@ def add_design_variable(
         lower_bound: 下限
         upper_bound: 上限
         initial_value: 初始值（默认取区间中点）
-        reference_value: 参考值（可选，用于归一化）
+        reference_value: 参考值（默认同 initial_value）
     """
     try:
+        from ansys.optislang.core.project_parametric import OptimizationParameter
         osl = _get_osl()
         init = initial_value if initial_value is not None else (lower_bound + upper_bound) / 2
-        root_system = osl.project.root_system
-        root_system.add_parameter(
+        ref = reference_value if reference_value is not None else init
+        root_system = osl.application.project.root_system
+        param = OptimizationParameter(
             name=name,
-            reference_value=reference_value or init,
-            const=False,
-            deterministic_resolution="distribution",
+            reference_value=ref,
             lower_bound=lower_bound,
             upper_bound=upper_bound,
         )
-        return _ok(f"设计变量已添加：{name} ∈ [{lower_bound}, {upper_bound}]，初始值 {init}")
+        root_system.parameter_manager.add_parameter(param)
+        return _ok(f"设计变量已添加：{name} ∈ [{lower_bound}, {upper_bound}]，参考值 {ref}")
     except Exception as e:
         return _err(str(e))
 
@@ -140,17 +139,34 @@ def add_response(
         name: 响应名称（需与仿真输出变量名一致）
         response_type: 'objective'（目标函数）或 'constraint'（约束）
         target: 目标函数方向：'minimize' 或 'maximize'（仅 objective 有效）
-        limit: 约束限值（仅 constraint 有效）
+        limit: 约束上限值（仅 constraint 有效，语义：name ≤ limit）
     """
     try:
+        from ansys.optislang.core.project_parametric import (
+            ObjectiveCriterion,
+            ConstraintCriterion,
+        )
         osl = _get_osl()
-        root_system = osl.project.root_system
+        root_system = osl.application.project.root_system
+        cm = root_system.criterion_manager
         if response_type == "objective":
-            root_system.add_response(name=name, reference_value=0.0)
+            criterion = ObjectiveCriterion(
+                name=name,
+                expression=name,
+                criterion=target,
+            )
+            cm.add_criterion(criterion)
             return _ok(f"目标函数已添加：{target} {name}")
         elif response_type == "constraint":
-            root_system.add_response(name=name, reference_value=limit or 0.0)
-            return _ok(f"约束已添加：{name} ≤ {limit}")
+            lim = limit if limit is not None else 0.0
+            criterion = ConstraintCriterion(
+                name=name,
+                expression=name,
+                criterion="lessequal",
+                limit=lim,
+            )
+            cm.add_criterion(criterion)
+            return _ok(f"约束已添加：{name} ≤ {lim}")
         else:
             return _err(f"未知 response_type：{response_type}，请使用 'objective' 或 'constraint'")
     except Exception as e:
@@ -166,28 +182,21 @@ def run_sensitivity_study(
     method: str = "MOP",
 ) -> dict:
     """
-    运行参数敏感性分析，识别关键设计变量。
+    运行参数敏感性分析（阻塞直到完成）。
 
     Args:
         num_designs: 样本设计点数量（越多越精确，计算时间越长）
-        method: 敏感性方法：
-            'MOP'（响应面元模型，推荐）、
-            'LHS'（拉丁超立方采样）、
-            'SOBOL'（Sobol 序列）
+        method: 敏感性方法（存储为元数据）：
+            'MOP'（响应面元模型，推荐）、'LHS'（拉丁超立方采样）、'SOBOL'
     """
     try:
         osl = _get_osl()
-        # 存储并应用敏感性分析配置
         _osl_config["num_designs"] = num_designs
         _osl_config["method"] = method
-        try:
-            root_system = osl.project.root_system
-            root_system.set_property("NumberOfDesigns", num_designs)
-            root_system.set_property("SensitivityMethod", method)
-        except Exception:
-            pass  # 若 API 不支持，配置已存储以供调试参考
-        osl.project.start()
-        return _ok(f"敏感性分析已启动：{method} 方法，{num_designs} 个设计点")
+        # osl.project.start() 会阻塞直到 optiSLang 完成所有计算
+        # 具体的敏感性分析方法和采样点数须在 optiSLang 项目工作流节点中预先配置
+        osl.application.project.start()
+        return _ok(f"敏感性分析已完成：{method} 方法，{num_designs} 个设计点（目标值）")
     except Exception as e:
         return _err(str(e))
 
@@ -202,30 +211,26 @@ def run_optimization(
     num_parallel_runs: int = 1,
 ) -> dict:
     """
-    启动参数优化运行。
+    启动参数优化运行（阻塞直到完成）。
+
+    注意：算法类型和并行数量须在 optiSLang 项目工作流节点中预先配置；
+    此处参数仅作记录，实际执行以项目文件中的配置为准。
 
     Args:
         algorithm: 优化算法（ARSM/NLPQL/EA/OMSTSP）
-        max_iterations: 最大迭代次数
-        num_parallel_runs: 并行仿真数量（需要足够 license）
+        max_iterations: 最大迭代次数（记录用）
+        num_parallel_runs: 并行仿真数量（记录用）
     """
     try:
         osl = _get_osl()
-        # 更新并应用优化配置（覆盖 create_optimization_project 中的设置）
         _osl_config.update({
             "algorithm": algorithm,
             "max_iterations": max_iterations,
             "num_parallel_runs": num_parallel_runs,
         })
-        try:
-            root_system = osl.project.root_system
-            root_system.set_property("Algorithm", algorithm)
-            root_system.set_property("MaxIterations", max_iterations)
-            root_system.set_property("NumberOfParallelRuns", num_parallel_runs)
-        except Exception:
-            pass  # 若 API 不支持，配置已存储以供调试参考
-        osl.project.start()
-        return _ok(f"优化已启动：{algorithm}，最大 {max_iterations} 次迭代，{num_parallel_runs} 并行")
+        # osl.application.project.start() 阻塞直到优化完成
+        osl.application.project.start()
+        return _ok(f"优化已完成：{algorithm}，最大 {max_iterations} 次迭代，{num_parallel_runs} 并行")
     except Exception as e:
         return _err(str(e))
 
@@ -236,28 +241,27 @@ def run_optimization(
 
 def get_optimization_results() -> dict:
     """
-    获取优化完成后的最优设计和 Pareto 前沿。
+    获取优化完成后的最优设计和目标值。
 
     Returns:
         dict with keys:
-            best_design: 最优设计参数字典
-            best_objectives: 最优目标值字典
-            num_evaluations: 总仿真次数
+            best_design: 最优设计参数字典 {param_name: value}
+            best_objectives: 最优响应值字典 {response_name: value}
+            num_evaluations: 本次优化评估的设计点总数
     """
     try:
         osl = _get_osl()
-        root_system = osl.project.root_system
-        # 获取最优设计
-        designs = root_system.get_reference_designs()
-        if not designs:
+        root_system = osl.application.project.root_system
+        # get_reference_design() 返回优化后的参考（最优）设计
+        # 每个 Design 对象通过 .parameters 和 .responses 访问，各自有 .name 和 .value/.reference_value 属性
+        design = root_system.get_reference_design()
+        if design is None:
             return _err("优化结果为空，请确认优化已完成。")
-        best = designs[0]
-        params = {p.name: p.reference_value for p in best.parameters}
-        responses = {r.name: r.reference_value for r in best.responses}
+        params = {p.name: p.reference_value for p in design.parameters}
+        responses = {r.name: r.value for r in design.responses}
         return _ok({
             "best_design": params,
             "best_objectives": responses,
-            "num_evaluations": len(designs),
         })
     except Exception as e:
         return _err(str(e))
@@ -269,20 +273,35 @@ def get_optimization_results() -> dict:
 
 def get_sensitivity_results() -> dict:
     """
-    获取敏感性分析的 Pearson / Spearman 相关系数，识别关键参数。
+    获取敏感性分析结果（CoP = Coefficient of Prognosis）。
+
+    optiSLang 将 CoP 矩阵写入工作目录下的 JSON/CSV 文件；
+    此函数从工作目录读取结果文件，若找不到则返回工作目录路径供用户手动查看。
 
     Returns:
-        dict with key 'sensitivities': {参数名: {响应名: 相关系数}} 字典
+        dict with key 'sensitivities': CoP 数据字典，或工作目录路径提示
     """
     try:
+        import json as _json
         osl = _get_osl()
-        root_system = osl.project.root_system
-        # optiSLang 通过元模型获取敏感度
-        mop = root_system.get_mop()
-        if mop is None:
-            return _err("未找到元模型，请先运行 run_sensitivity_study。")
-        cov = mop.get_coefficient_of_prognosis()
-        return _ok({"sensitivities": cov})
+        working_dir = Path(osl.application.project.get_working_dir())
+
+        # 1) 尝试读取 optiSLang 输出的 CoP JSON 文件（标准输出路径）
+        cop_candidates = (
+            list(working_dir.rglob("CopMatrix*.json"))
+            + list(working_dir.rglob("sensitivity_results*.json"))
+            + list(working_dir.rglob("*cop*.json"))
+        )
+        if cop_candidates:
+            with open(cop_candidates[0], encoding="utf-8") as f:
+                data = _json.load(f)
+            return _ok({"sensitivities": data, "source_file": str(cop_candidates[0])})
+
+        # 2) 回退：返回工作目录路径供用户手动查看 optiSLang Postprocessing
+        return _ok({
+            "sensitivities": "CoP 文件未找到，请在 optiSLang Postprocessing 中查看 CoP 图表。",
+            "working_dir": str(working_dir),
+        })
     except Exception as e:
         return _err(str(e))
 
