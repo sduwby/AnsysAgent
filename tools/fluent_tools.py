@@ -466,7 +466,7 @@ def setup_fluid_material(
         specific_heat: 比热容（J/(kg·K)），None 则保持当前值；
                        开启能量方程时生效
         density_model: 密度模型，"constant"（常数）、"ideal-gas"（理想气体，
-                       需开启能量方程）、"boussinesq"（Boussinesq 近似，自然对流用）
+                       会自动开启能量方程）、"boussinesq"（Boussinesq 近似，自然对流用）
     """
     try:
         session = _session()
@@ -479,6 +479,8 @@ def setup_fluid_material(
 
         # 密度模型
         if density_model == "ideal-gas":
+            # ideal-gas 依赖能量方程，自动开启
+            session.setup.models.energy.enabled = True
             mat.density.option = "ideal-gas"
         elif density_model == "boussinesq":
             mat.density.option = "boussinesq"
