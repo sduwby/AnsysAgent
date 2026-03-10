@@ -5,7 +5,9 @@ Maxwell 工具：PyAEDT 电机电磁仿真操作封装。
 
 from __future__ import annotations
 
-from typing import Any
+import math
+
+from tools.utils import _ok, _err
 
 # PyAEDT 延迟导入，允许在未安装 Ansys 的环境中加载模块
 _aedt_app = None  # 全局 AEDT Maxwell2d/3d 实例
@@ -20,14 +22,6 @@ def _app():
     if _aedt_app is None:
         raise RuntimeError("未连接到 AEDT，请先调用 connect_aedt。")
     return _aedt_app
-
-
-def _ok(result: Any = None) -> dict:
-    return {"success": True, "result": result}
-
-
-def _err(msg: str) -> dict:
-    return {"success": False, "error": msg}
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +91,19 @@ def create_motor_geometry(
     在 Maxwell 2D 中建立表贴式 PMSM 简化几何模型。
     所有尺寸单位为 mm，使用 PyAEDT 图元接口。
     """
+    # 前置几何合法性校验
+    if stator_inner_radius >= stator_outer_radius:
+        return _err("定子内径必须小于外径")
+    if rotor_outer_radius >= stator_inner_radius:
+        return _err("转子外径必须小于定子内径（气隙不存在）")
+    if rotor_inner_radius >= rotor_outer_radius:
+        return _err("转子内径必须小于外径")
+    if num_slots <= 0 or num_poles <= 0:
+        return _err("槽数和极数必须为正整数")
+    if magnet_thickness <= 0:
+        return _err("永磁体厚度必须为正值")
+    if magnet_thickness >= (stator_inner_radius - rotor_outer_radius):
+        return _err("永磁体厚度不能超过气隙宽度")
     try:
         app = _app()
         modeler = app.modeler
@@ -136,7 +143,6 @@ def create_motor_geometry(
         modeler.get_object_from_name("Rotor_Outer").name = "Rotor"
 
         # 气隙区域
-        air_gap_outer = rotor_outer_radius + (stator_inner_radius - rotor_outer_radius) / 2
         modeler.create_circle(
             position=[0, 0, 0],
             radius=stator_inner_radius,
@@ -153,28 +159,87 @@ def create_motor_geometry(
         modeler.subtract("AirGap_Outer", "AirGap_Inner_Cut", keep_originals=False)
         modeler.get_object_from_name("AirGap_Outer").name = "AirGap"
 
-        # 表贴式永磁体（简化：每极一块，弧形近似，磁极弧系数 0.85）
-        import math
+        # 表贴式永磁体：每极一块扇形面（外弧 + 内弧封闭多边形），磁极弧系数 0.85
+        # 使用 create_polyline + cover_surface=True 生成 2D 面对象（而非 1D 弧线），
+        # 确保 Maxwell 2D 可正确赋予材料和参与仿真计算。
         pole_angle = 360.0 / num_poles
         magnet_arc = pole_angle * 0.85
+        inner_r = rotor_outer_radius               # 永磁体内弧半径（紧贴转子表面）
+        outer_r = rotor_outer_radius + magnet_thickness  # 永磁体外弧半径
+        num_arc_pts = 16  # 每段弧的离散点数，越多弧形越精确
+
         for i in range(num_poles):
             start_angle = i * pole_angle - magnet_arc / 2
-            name = f"Magnet_{i+1}"
-            modeler.create_circle_arc_3points(
-                arc_beginning=[
-                    (rotor_outer_radius) * math.cos(math.radians(start_angle)),
-                    (rotor_outer_radius) * math.sin(math.radians(start_angle)),
+            end_angle = start_angle + magnet_arc
+            obj_name = f"Magnet_{i+1}"
+
+            # 外弧点列（start_angle → end_angle）
+            outer_pts = [
+                [
+                    outer_r * math.cos(math.radians(start_angle + magnet_arc * k / num_arc_pts)),
+                    outer_r * math.sin(math.radians(start_angle + magnet_arc * k / num_arc_pts)),
                     0,
-                ],
-                arc_end=[
-                    (rotor_outer_radius) * math.cos(math.radians(start_angle + magnet_arc)),
-                    (rotor_outer_radius) * math.sin(math.radians(start_angle + magnet_arc)),
+                ]
+                for k in range(num_arc_pts + 1)
+            ]
+            # 内弧点列（end_angle → start_angle，反向以封闭多边形）
+            inner_pts = [
+                [
+                    inner_r * math.cos(math.radians(end_angle - magnet_arc * k / num_arc_pts)),
+                    inner_r * math.sin(math.radians(end_angle - magnet_arc * k / num_arc_pts)),
                     0,
-                ],
-                arc_center=[0, 0, 0],
-                name=name,
-                material="NdFe35",
+                ]
+                for k in range(num_arc_pts + 1)
+            ]
+            polygon = outer_pts + inner_pts  # 外弧 + 内弧构成封闭扇形边界
+
+            modeler.create_polyline(
+                position_list=polygon,
+                cover_surface=True,  # 将封闭折线覆盖为 2D 面对象
+                name=obj_name,
+                matname="NdFe35",
             )
+
+        # 定子槽内铜导体：每槽一个扇形面
+        # 槽深取定子轭部厚度的 60%，槽宽取槽距的 70%（含绝缘余量）
+        slot_pitch = 360.0 / num_slots
+        slot_arc = slot_pitch * 0.70
+        cond_inner_r = stator_inner_radius                          # 导体内弧 = 定子内径
+        yoke_thickness = stator_outer_radius - stator_inner_radius
+        cond_outer_r = stator_inner_radius + yoke_thickness * 0.60  # 导体外弧
+
+        for i in range(num_slots):
+            center_angle = i * slot_pitch
+            s_start = center_angle - slot_arc / 2
+            s_end = s_start + slot_arc
+            cond_name = f"Conductor_{i + 1}"
+
+            cond_outer_pts = [
+                [
+                    cond_outer_r * math.cos(math.radians(s_start + slot_arc * k / num_arc_pts)),
+                    cond_outer_r * math.sin(math.radians(s_start + slot_arc * k / num_arc_pts)),
+                    0,
+                ]
+                for k in range(num_arc_pts + 1)
+            ]
+            cond_inner_pts = [
+                [
+                    cond_inner_r * math.cos(math.radians(s_end - slot_arc * k / num_arc_pts)),
+                    cond_inner_r * math.sin(math.radians(s_end - slot_arc * k / num_arc_pts)),
+                    0,
+                ]
+                for k in range(num_arc_pts + 1)
+            ]
+            cond_polygon = cond_outer_pts + cond_inner_pts
+
+            modeler.create_polyline(
+                position_list=cond_polygon,
+                cover_surface=True,
+                name=cond_name,
+                matname="copper",
+            )
+            # 从定子铁心挖去导体区域，keep_originals=True 保留导体对象
+            modeler.subtract("Stator", cond_name, keep_originals=True)
 
         return _ok(
             f"电机几何已建立：{num_slots} 槽，{num_poles} 极，"
@@ -248,6 +313,7 @@ def add_solution_setup(
     stop_time: float = 0.02,
     time_step: float = 0.0001,
     num_passes: int = 10,
+    frequency_Hz: float = 50.0,
 ) -> dict:
     """
     添加求解设置。
@@ -257,6 +323,7 @@ def add_solution_setup(
         stop_time: 仿真结束时间（秒，瞬态专用）
         time_step: 时间步长（秒，瞬态专用）
         num_passes: 自适应网格剖分最大迭代次数
+        frequency_Hz: 涡流激励频率（Hz，EddyCurrent 专用，默认 50 Hz）
     """
     try:
         app = _app()
@@ -272,6 +339,7 @@ def add_solution_setup(
         elif solver_type == "EddyCurrent":
             setup = app.create_setup(name="Setup1")
             setup.props["MaximumPasses"] = num_passes
+            setup.props["Frequency"] = f"{frequency_Hz}Hz"
             setup.update()
         else:
             return _err(f"未知求解器类型：{solver_type}")

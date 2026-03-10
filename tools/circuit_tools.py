@@ -4,7 +4,8 @@ Maxwell Circuit 工具：驱动器电路与电机联合仿真封装。
 """
 
 from __future__ import annotations
-from typing import Any
+
+from tools.utils import _ok, _err
 
 _circuit_app = None  # 全局 Circuit 实例
 
@@ -13,14 +14,6 @@ def _app():
     if _circuit_app is None:
         raise RuntimeError("未连接到 Maxwell Circuit，请先调用 connect_circuit。")
     return _circuit_app
-
-
-def _ok(result: Any = None) -> dict:
-    return {"success": True, "result": result}
-
-
-def _err(msg: str) -> dict:
-    return {"success": False, "error": msg}
 
 
 # ---------------------------------------------------------------------------
@@ -70,10 +63,39 @@ def create_inverter_circuit(
             location=[0, 0],
         )
 
-        # 放置六个 IGBT 开关（简化：使用理想开关）
-        for i, (phase, pos) in enumerate(zip(["A", "B", "C"], [[2, 2], [4, 2], [6, 2]])):
-            schematic.schematic.add_component(f"S_High_{phase}", "SwitchIGBT", location=pos)
-            schematic.schematic.add_component(f"S_Low_{phase}", "SwitchIGBT", location=[pos[0], pos[1] - 2])
+        # 放置六个 IGBT 开关并实际设置开关频率和死区时间属性
+        positions = {"A": [2, 2], "B": [4, 2], "C": [6, 2]}
+        for phase, pos in positions.items():
+            for side, y_off in [("High", 0), ("Low", -2)]:
+                name = f"S_{side}_{phase}"
+                comp = schematic.schematic.add_component(
+                    name, "SwitchIGBT", location=[pos[0], pos[1] + y_off]
+                )
+                # 将开关频率与死区时间写入组件属性
+                try:
+                    comp.parameters["SwitchingFrequency"] = f"{switching_freq_Hz}Hz"
+                    comp.parameters["DeadTime"] = f"{dead_time_us}us"
+                except Exception:
+                    pass  # 属性名以实际 AEDT 版本为准，确保不中断流程
+
+        # 连接直流正母线：V_DC 正极 → 各上管漏极
+        bus_y_pos = 3
+        bus_y_neg = -1
+        for pos in positions.values():
+            try:
+                schematic.schematic.create_wire(
+                    [[0, bus_y_pos], [pos[0], bus_y_pos], [pos[0], pos[1]]]
+                )
+            except Exception:
+                pass
+        # 连接直流负母线：各下管源极 → V_DC 负极
+        for pos in positions.values():
+            try:
+                schematic.schematic.create_wire(
+                    [[pos[0], pos[1] - 2], [pos[0], bus_y_neg], [0, bus_y_neg]]
+                )
+            except Exception:
+                pass
 
         return _ok(
             f"三相逆变器电路已创建：Vdc={dc_voltage_V}V，"
@@ -160,8 +182,8 @@ def get_circuit_results(signals: list[str] | None = None) -> dict:
                 times = data.primary_sweep_values
                 values = data.data_real(sig)
                 results[sig] = {
-                    "time_s": list(times[:10]),   # 仅返回前10点用于展示
-                    "values": list(values[:10]),
+                    "time_s": list(times),
+                    "values": list(values),
                     "peak": round(max(abs(v) for v in values), 4) if values else None,
                 }
             except Exception:

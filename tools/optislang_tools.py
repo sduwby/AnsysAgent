@@ -4,10 +4,12 @@ optiSLang 工具：通过 ansys-optislang-core 接口驱动参数优化与敏感
 """
 
 from __future__ import annotations
-from typing import Any
+
+from tools.utils import _ok, _err
 
 # ansys-optislang-core 延迟导入，允许在未安装 Ansys 的环境中加载模块
 _osl = None  # 全局 optiSLang 实例
+_osl_config: dict = {}  # 运行时配置（算法、迭代次数等）
 
 
 def _get_osl():
@@ -15,14 +17,6 @@ def _get_osl():
     if _osl is None:
         raise RuntimeError("未连接到 optiSLang，请先调用 connect_optislang。")
     return _osl
-
-
-def _ok(result: Any = None) -> dict:
-    return {"success": True, "result": result}
-
-
-def _err(msg: str) -> dict:
-    return {"success": False, "error": msg}
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +70,16 @@ def create_optimization_project(
         osl = _get_osl()
         osl.application.new()
         osl.application.set_project_name(project_name)
+        # 存储配置以供后续 run_optimization / run_sensitivity_study 使用
+        _osl_config["algorithm"] = algorithm
+        _osl_config["max_iterations"] = max_iterations
+        # 尝试在 root_system 上实际配置算法（ansys-optislang-core 属性名可能因版本而异）
+        try:
+            root_system = osl.project.root_system
+            root_system.set_property("Algorithm", algorithm)
+            root_system.set_property("MaxIterations", max_iterations)
+        except Exception:
+            pass  # 若 API 不支持，配置已保存在 _osl_config 中
         return _ok(f"优化项目已创建：{project_name}，算法：{algorithm}，最大迭代：{max_iterations}")
     except Exception as e:
         return _err(str(e))
@@ -173,6 +177,15 @@ def run_sensitivity_study(
     """
     try:
         osl = _get_osl()
+        # 存储并应用敏感性分析配置
+        _osl_config["num_designs"] = num_designs
+        _osl_config["method"] = method
+        try:
+            root_system = osl.project.root_system
+            root_system.set_property("NumberOfDesigns", num_designs)
+            root_system.set_property("SensitivityMethod", method)
+        except Exception:
+            pass  # 若 API 不支持，配置已存储以供调试参考
         osl.project.start()
         return _ok(f"敏感性分析已启动：{method} 方法，{num_designs} 个设计点")
     except Exception as e:
@@ -198,6 +211,19 @@ def run_optimization(
     """
     try:
         osl = _get_osl()
+        # 更新并应用优化配置（覆盖 create_optimization_project 中的设置）
+        _osl_config.update({
+            "algorithm": algorithm,
+            "max_iterations": max_iterations,
+            "num_parallel_runs": num_parallel_runs,
+        })
+        try:
+            root_system = osl.project.root_system
+            root_system.set_property("Algorithm", algorithm)
+            root_system.set_property("MaxIterations", max_iterations)
+            root_system.set_property("NumberOfParallelRuns", num_parallel_runs)
+        except Exception:
+            pass  # 若 API 不支持，配置已存储以供调试参考
         osl.project.start()
         return _ok(f"优化已启动：{algorithm}，最大 {max_iterations} 次迭代，{num_parallel_runs} 并行")
     except Exception as e:

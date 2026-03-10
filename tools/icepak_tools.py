@@ -4,7 +4,8 @@ Icepak 热分析工具：通过 PyAEDT 驱动 Ansys Icepak 进行电机热仿真
 """
 
 from __future__ import annotations
-from typing import Any
+
+from tools.utils import _ok, _err
 
 _icepak_app = None  # 全局 Icepak 实例
 
@@ -13,14 +14,6 @@ def _app():
     if _icepak_app is None:
         raise RuntimeError("未连接到 Icepak，请先调用 connect_icepak。")
     return _icepak_app
-
-
-def _ok(result: Any = None) -> dict:
-    return {"success": True, "result": result}
-
-
-def _err(msg: str) -> dict:
-    return {"success": False, "error": msg}
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +64,14 @@ def setup_motor_thermal(
             try:
                 obj = app.modeler.get_object_from_name(obj_name)
                 if obj:
-                    loss = copper_loss_W if "Winding" in obj_name else iron_loss_W / 2
+                    # PMSM 铁耗分布：定子铁耗约占 90%，转子铁耗约占 10%
+                    # 不采用等分，避免严重高估转子温升
+                    if "Winding" in obj_name:
+                        loss = copper_loss_W
+                    elif "Stator" in obj_name:
+                        loss = iron_loss_W * 0.9
+                    else:  # Rotor
+                        loss = iron_loss_W * 0.1
                     app.assign_source(
                         obj_name,
                         "TotalPower",

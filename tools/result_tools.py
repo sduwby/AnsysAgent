@@ -3,8 +3,9 @@
 """
 
 from __future__ import annotations
-from typing import Any
-from tools.maxwell_tools import _app, _ok, _err
+
+from tools.maxwell_tools import _app
+from tools.utils import _ok, _err
 
 
 # ---------------------------------------------------------------------------
@@ -21,11 +22,15 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
     try:
         app = _app()
         # 瞬态仿真：获取时域转矩波形
+        # 若同名报告已存在则先删除，避免重复创建报错
+        report_name = "TorqueReport"
+        if report_name in app.post.all_report_names:
+            app.post.delete_report(report_name)
         report = app.post.create_report(
             expressions=["Moving1.Torque"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category="Transient",
-            report_name="TorqueReport",
+            report_name=report_name,
         )
         data = report.get_solution_data()
         times = data.primary_sweep_values
@@ -52,11 +57,14 @@ def get_back_emf(
     """提取指定相的反电动势波形。"""
     try:
         app = _app()
+        report_name = "BackEMFReport"
+        if report_name in app.post.all_report_names:
+            app.post.delete_report(report_name)
         report = app.post.create_report(
             expressions=[f"InducedVoltage({phase_name})"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category="Transient",
-            report_name="BackEMFReport",
+            report_name=report_name,
         )
         data = report.get_solution_data()
         times = data.primary_sweep_values
@@ -109,11 +117,14 @@ def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
     try:
         app = _app()
         expressions = ["CoreLoss", "OhmicLoss"]
+        report_name = "LossReport"
+        if report_name in app.post.all_report_names:
+            app.post.delete_report(report_name)
         report = app.post.create_report(
             expressions=expressions,
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category="Transient",
-            report_name="LossReport",
+            report_name=report_name,
         )
         data = report.get_solution_data()
         core_loss = data.data_real("CoreLoss")

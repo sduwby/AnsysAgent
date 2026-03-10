@@ -20,8 +20,9 @@ console = Console()
 VERSION = "0.1.0"
 
 WELCOME = (
-    "[bold cyan]Ansys Maxwell 电机电磁仿真助手[/bold cyan]\n"
-    "专注于电机电磁仿真，基于 AEDT 2024 + DeepSeek\n\n"
+    "[bold cyan]Ansys 电机仿真智能助手[/bold cyan]\n"
+    "支持电磁仿真、热分析、NVH结构振动、Circuit联仿、参数化扫描与 optiSLang 优化\n"
+    "基于 AEDT 2024 + DeepSeek\n\n"
     "[dim]输入自然语言描述需求，例如：\n"
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"

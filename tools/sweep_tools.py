@@ -4,9 +4,9 @@
 """
 
 from __future__ import annotations
-from typing import Any
 
-from tools.maxwell_tools import _app, _ok, _err
+from tools.maxwell_tools import _app
+from tools.utils import _ok, _err
 
 
 # ---------------------------------------------------------------------------
@@ -181,21 +181,23 @@ def create_2d_sweep(
         app = _app()
         total = len(param1_values) * len(param2_values)
 
-        # 为每个参数创建扫描
-        sweep1 = app.parametrics.add(
+        # 创建统一参数扫描，将两个参数加入同一个 ParametricSetup 形成笛卡尔积
+        sweep = app.parametrics.add(
             variable=param1_name,
             values_list=param1_values,
             variation_type="SingleValues",
         )
-        sweep2 = app.parametrics.add(
+        # 将第二个参数加入同一扫描（与第一参数构成笛卡尔积）
+        sweep.add_variation(
             variable=param2_name,
             values_list=param2_values,
             variation_type="SingleValues",
         )
-        sweep1.add_calculation(setup_name, "LastAdaptive", ["Torque", "CoreLoss", "OhmicLoss"])
-        sweep1.update()
+        sweep.add_calculation(setup_name, "LastAdaptive", ["Torque", "CoreLoss", "OhmicLoss"])
+        sweep.update()
 
         return _ok({
+            "sweep_name": sweep.name,
             "total_points": total,
             "param1": {"name": param1_name, "count": len(param1_values)},
             "param2": {"name": param2_name, "count": len(param2_values)},

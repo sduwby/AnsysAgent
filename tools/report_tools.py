@@ -7,15 +7,8 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Any
 
-
-def _ok(result: Any = None) -> dict:
-    return {"success": True, "result": result}
-
-
-def _err(msg: str) -> dict:
-    return {"success": False, "error": msg}
+from tools.utils import _ok, _err
 
 
 # ---------------------------------------------------------------------------
@@ -43,12 +36,14 @@ def generate_report(
 
         if format == "html":
             content = _build_html_report(motor_name, now, results)
-            if not output_path.endswith(".html"):
-                output_path = output_path.rstrip(".") + ".html"
+            base, ext = os.path.splitext(output_path)
+            if ext.lower() != ".html":
+                output_path = base + ".html"
         else:
             content = _build_markdown_report(motor_name, now, results)
-            if not output_path.endswith(".md"):
-                output_path = output_path.rstrip(".") + ".md"
+            base, ext = os.path.splitext(output_path)
+            if ext.lower() != ".md":
+                output_path = base + ".md"
 
         # 确保目录存在
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
