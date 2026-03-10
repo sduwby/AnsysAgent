@@ -14,6 +14,7 @@ from tools import (
     mechanical_tools,
     sweep_tools,
     report_tools,
+    fluent_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,17 @@ TOOL_REGISTRY: dict[str, callable] = {
     # 报告生成工具
     "generate_report": report_tools.generate_report,
     "export_aedt_report": report_tools.export_aedt_report,
+    # Fluent 流体分析工具
+    "connect_fluent": fluent_tools.connect_fluent,
+    "read_fluent_mesh": fluent_tools.read_fluent_mesh,
+    "setup_fluid_models": fluent_tools.setup_fluid_models,
+    "define_boundary_conditions": fluent_tools.define_boundary_conditions,
+    "setup_fluent_solver": fluent_tools.setup_fluent_solver,
+    "initialize_fluent": fluent_tools.initialize_fluent,
+    "run_fluent_simulation": fluent_tools.run_fluent_simulation,
+    "get_fluent_results": fluent_tools.get_fluent_results,
+    "export_fluent_data": fluent_tools.export_fluent_data,
+    "setup_fluid_material": fluent_tools.setup_fluid_material,
 }
 
 # ---------------------------------------------------------------------------
@@ -683,6 +695,217 @@ TOOL_DEFINITIONS = [
                     "report_names": {"type": "array", "items": {"type": "string"}, "description": "指定报告名，None 则导出全部"},
                 },
                 "required": ["output_dir"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # Fluent 流体分析工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_fluent",
+            "description": "启动 Ansys Fluent 求解器会话（通过 ansys-fluent-core）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "Fluent 版本号，如 '23.2'（2023 R2）、'24.1'（2024 R1）"},
+                    "precision": {"type": "string", "enum": ["double", "single"], "description": "计算精度，double 推荐"},
+                    "processors": {"type": "integer", "description": "并行进程数（CPU 核心数），默认 4"},
+                    "mode": {"type": "string", "enum": ["solver", "meshing"], "description": "运行模式，默认 solver"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_fluent_mesh",
+            "description": "读取网格或 Case 文件到 Fluent（支持 .msh、.msh.gz、.cas、.cas.gz）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mesh_file_path": {"type": "string", "description": "网格/Case 文件的完整路径"},
+                },
+                "required": ["mesh_file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_fluid_models",
+            "description": "配置 Fluent 流体物理模型，包括湍流模型和能量方程。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "viscous_model": {
+                        "type": "string",
+                        "enum": ["laminar", "k-epsilon", "k-omega", "sst", "realizable-ke", "rng-ke"],
+                        "description": "湍流模型：laminar/k-epsilon/k-omega/sst/realizable-ke/rng-ke",
+                    },
+                    "k_epsilon_variant": {
+                        "type": "string",
+                        "enum": ["standard", "rng", "realizable"],
+                        "description": "k-epsilon 子模型，viscous_model=k-epsilon 时有效",
+                    },
+                    "energy_on": {"type": "boolean", "description": "是否开启能量方程（温度计算），默认 false"},
+                    "turbulence_intensity": {"type": "number", "description": "湍流强度（0~1），默认 0.05（5%）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "define_boundary_conditions",
+            "description": "为指定边界面设定边界条件（速度入口、压力入口/出口、壁面等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "boundary_name": {"type": "string", "description": "边界名称，与网格定义一致，如 'inlet'、'outlet'"},
+                    "bc_type": {
+                        "type": "string",
+                        "enum": ["velocity-inlet", "pressure-inlet", "pressure-outlet", "wall", "symmetry"],
+                        "description": "边界类型",
+                    },
+                    "velocity_magnitude": {"type": "number", "description": "速度大小（m/s），velocity-inlet 必填"},
+                    "pressure_value": {"type": "number", "description": "表压（Pa），pressure-inlet/outlet 使用"},
+                    "temperature": {"type": "number", "description": "温度（K），开启能量方程时设置"},
+                    "turbulence_intensity": {"type": "number", "description": "湍流强度（0~1），默认 0.05"},
+                    "hydraulic_diameter": {"type": "number", "description": "水力直径（m），用于湍流参数估算"},
+                },
+                "required": ["boundary_name", "bc_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_fluent_solver",
+            "description": "配置 Fluent 求解算法和收敛参数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scheme": {
+                        "type": "string",
+                        "enum": ["coupled", "simple"],
+                        "description": "求解算法：coupled（耦合，推荐）或 simple（分离）",
+                    },
+                    "convergence_absolute": {"type": "number", "description": "收敛绝对残差标准，默认 1e-4"},
+                    "max_iterations": {"type": "integer", "description": "最大迭代步数，默认 500"},
+                    "under_relaxation_velocity": {"type": "number", "description": "速度亚松弛因子（SIMPLE 专用），默认 0.7"},
+                    "under_relaxation_pressure": {"type": "number", "description": "压力亚松弛因子（SIMPLE 专用），默认 0.3"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "initialize_fluent",
+            "description": "初始化 Fluent 流场（混合初始化或标准初始化）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["hybrid", "standard"],
+                        "description": "初始化方法：hybrid（推荐）或 standard",
+                    },
+                    "reference_velocity": {"type": "number", "description": "参考速度（m/s），standard 方法用"},
+                    "reference_pressure": {"type": "number", "description": "参考压力（Pa），standard 方法用"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_fluent_simulation",
+            "description": "执行 Fluent 稳态迭代计算。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "iterations": {"type": "integer", "description": "最大迭代步数，默认 300"},
+                    "report_interval": {"type": "integer", "description": "残差报告输出间隔（步数），默认 10"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fluent_results",
+            "description": "提取指定边界面的流场结果（面积加权平均值），自动计算压降。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "surfaces": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要提取结果的面名称列表，如 ['inlet', 'outlet']；None 则使用默认",
+                    },
+                    "quantities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "物理量列表，如 ['pressure', 'velocity-magnitude', 'temperature', 'wall-shear-stress']",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_fluent_data",
+            "description": "将 Fluent 仿真结果导出为 CSV 文件或保存 Case+Data 文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出文件路径（不含扩展名则自动追加）"},
+                    "surfaces": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要导出的边界面列表；None 则使用 inlet/outlet",
+                    },
+                    "quantities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要导出的物理量列表；None 则使用默认量",
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["csv", "case-data"],
+                        "description": "导出格式：csv（表格）或 case-data（保存 .cas.gz+.dat.gz）",
+                    },
+                },
+                "required": ["output_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_fluid_material",
+            "description": "配置 Fluent 流体域的物性参数（密度、动力黏度、导热系数、比热容）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "material_name": {
+                        "type": "string",
+                        "description": "材料名称，默认 'air'；支持 'water-liquid'、'water-vapor' 等内置材料",
+                    },
+                    "density": {"type": "number", "description": "密度（kg/m³），None 保持默认值"},
+                    "viscosity": {"type": "number", "description": "动力黏度（Pa·s），None 保持默认值"},
+                    "thermal_conductivity": {"type": "number", "description": "导热系数（W/(m·K)），开启能量方程时生效"},
+                    "specific_heat": {"type": "number", "description": "比热容（J/(kg·K)），开启能量方程时生效"},
+                    "density_model": {
+                        "type": "string",
+                        "enum": ["constant", "ideal-gas", "boussinesq"],
+                        "description": "密度模型：constant（常数）、ideal-gas（理想气体）、boussinesq（自然对流近似）",
+                    },
+                },
             },
         },
     },

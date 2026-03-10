@@ -1,6 +1,9 @@
 # Ansys PyAEDT - Electronics Desktop Python 接口
 ansys-aedt-core>=0.13.0
 
+# Ansys PyFluent - Fluent CFD Python 接口
+ansys-fluent-core>=0.20.0
+
 # LLM 客户端（使用 OpenAI 兼容接口，对接 DeepSeek）
 openai>=1.30.0
 
