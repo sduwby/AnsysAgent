@@ -360,3 +360,135 @@ def run_simulation(setup_name: str = "Setup1") -> dict:
         return _ok(f"仿真 '{setup_name}' 已完成")
     except Exception as e:
         return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：create_custom_material - 创建自定义电磁材料
+# ---------------------------------------------------------------------------
+
+def create_custom_material(
+    material_name: str,
+    conductivity: float = 0.0,
+    mass_density: float = 7650.0,
+    permeability: float | None = None,
+    bh_curve: list[list[float]] | None = None,
+    core_loss_kh: float | None = None,
+    core_loss_kc: float | None = None,
+    core_loss_ke: float | None = None,
+) -> dict:
+    """
+    在 AEDT 材料库中创建自定义电磁材料（支持 B-H 曲线和铁耗系数）。
+
+    Args:
+        material_name: 新材料名称；若已存在则直接修改其属性
+        conductivity: 电导率（S/m），硅钢片典型值 1.9e6~2.0e6
+        mass_density: 质量密度（kg/m³），硅钢片典型值 7650
+        permeability: 相对磁导率（常数），提供 bh_curve 时忽略此参数
+        bh_curve: B-H 曲线数据点列表 [[H1, B1], [H2, B2], ...]
+                  H 单位 A/m，B 单位 T；点数建议 ≥ 10
+        core_loss_kh: 磁滞损耗系数 Kh（W/(m³·T²·Hz)）
+        core_loss_kc: 涡流损耗系数 Kc（W/(m³·T²·Hz²)）
+        core_loss_ke: 附加（过量）损耗系数 Ke（W/(m³·T^1.5·Hz^1.5)）
+    """
+    try:
+        app = _app()
+        # 获取或创建材料
+        if material_name in app.materials.material_keys:
+            mat = app.materials[material_name]
+        else:
+            mat = app.materials.add_material(material_name)
+
+        mat.conductivity.value = conductivity
+        mat.mass_density.value = mass_density
+
+        if bh_curve:
+            # 非线性磁导率：以 B-H 曲线描述
+            mat.permeability.type = "nonlinear"
+            mat.permeability.value = bh_curve
+        elif permeability is not None:
+            mat.permeability.value = permeability
+
+        # 铁耗系数（Steinmetz 模型）
+        if core_loss_kh is not None:
+            mat.core_loss_type = "electrical_steel"
+            if hasattr(mat, "core_loss_kh"):
+                mat.core_loss_kh = core_loss_kh
+            if core_loss_kc is not None and hasattr(mat, "core_loss_kc"):
+                mat.core_loss_kc = core_loss_kc
+            if core_loss_ke is not None and hasattr(mat, "core_loss_ke"):
+                mat.core_loss_ke = core_loss_ke
+
+        parts = [f"材料='{material_name}'", f"σ={conductivity} S/m", f"ρ={mass_density} kg/m³"]
+        if bh_curve:
+            parts.append(f"B-H 曲线（{len(bh_curve)} 点）")
+        elif permeability is not None:
+            parts.append(f"μr={permeability}")
+        if core_loss_kh is not None:
+            parts.append(f"铁耗系数 Kh={core_loss_kh}")
+        return _ok("，".join(parts))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：import_bh_curve - 从 CSV 导入 B-H 曲线
+# ---------------------------------------------------------------------------
+
+def import_bh_curve(
+    material_name: str,
+    csv_path: str,
+    h_column: int = 0,
+    b_column: int = 1,
+    skip_header: bool = True,
+) -> dict:
+    """
+    从 CSV 文件读取 B-H 数据并更新指定材料的非线性磁导率。
+    材料须已通过 create_custom_material 创建。
+
+    Args:
+        material_name: 目标材料名称
+        csv_path: CSV 文件路径（绝对路径）
+        h_column: H 值所在列索引（从0开始，默认第0列，单位 A/m）
+        b_column: B 值所在列索引（从0开始，默认第1列，单位 T）
+        skip_header: 是否跳过第一行标题，默认 True
+    """
+    import csv as csv_module
+    import os
+
+    try:
+        if not os.path.exists(csv_path):
+            return _err(f"CSV 文件不存在: {csv_path}")
+
+        bh_data: list[list[float]] = []
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv_module.reader(f)
+            if skip_header:
+                next(reader, None)
+            for row in reader:
+                try:
+                    h = float(row[h_column])
+                    b = float(row[b_column])
+                    bh_data.append([h, b])
+                except (ValueError, IndexError):
+                    continue
+
+        if len(bh_data) < 2:
+            return _err(
+                f"有效 B-H 数据点不足（仅解析到 {len(bh_data)} 个），"
+                "请检查 CSV 格式和列索引"
+            )
+
+        app = _app()
+        if material_name not in app.materials.material_keys:
+            return _err(f"材料 '{material_name}' 不存在，请先调用 create_custom_material 创建")
+
+        mat = app.materials[material_name]
+        mat.permeability.type = "nonlinear"
+        mat.permeability.value = bh_data
+
+        return _ok(
+            f"B-H 曲线已导入至 '{material_name}'：{len(bh_data)} 个数据点，"
+            f"H 范围 {bh_data[0][0]:.1f}~{bh_data[-1][0]:.1f} A/m"
+        )
+    except Exception as e:
+        return _err(str(e))

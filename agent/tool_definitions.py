@@ -15,6 +15,11 @@ from tools import (
     sweep_tools,
     report_tools,
     fluent_tools,
+    project_tools,
+    mesh_tools,
+    coupling_tools,
+    rmxprt_tools,
+    visualization_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -81,6 +86,40 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_fluent_results": fluent_tools.get_fluent_results,
     "export_fluent_data": fluent_tools.export_fluent_data,
     "setup_fluid_material": fluent_tools.setup_fluid_material,
+    # 自定义材料工具（Maxwell）
+    "create_custom_material": maxwell_tools.create_custom_material,
+    "import_bh_curve": maxwell_tools.import_bh_curve,
+    # 项目管理工具
+    "save_project": project_tools.save_project,
+    "open_project": project_tools.open_project,
+    "close_project": project_tools.close_project,
+    "list_designs": project_tools.list_designs,
+    "copy_design": project_tools.copy_design,
+    # 网格控制工具
+    "setup_length_mesh": mesh_tools.setup_length_mesh,
+    "setup_skin_depth_mesh": mesh_tools.setup_skin_depth_mesh,
+    "setup_surface_mesh": mesh_tools.setup_surface_mesh,
+    "get_mesh_stats": mesh_tools.get_mesh_stats,
+    # 电磁-热耦合工具
+    "link_maxwell_to_icepak": coupling_tools.link_maxwell_to_icepak,
+    "run_em_thermal_iteration": coupling_tools.run_em_thermal_iteration,
+    # P2 高级结果工具
+    "get_inductance": result_tools.get_inductance,
+    "get_flux_linkage": result_tools.get_flux_linkage,
+    "get_cogging_torque": result_tools.get_cogging_torque,
+    "get_efficiency_map": result_tools.get_efficiency_map,
+    "check_demagnetization": result_tools.check_demagnetization,
+    # P3 RMXprt 初设计工具
+    "connect_rmxprt": rmxprt_tools.connect_rmxprt,
+    "create_motor_from_template": rmxprt_tools.create_motor_from_template,
+    "run_rmxprt_analysis": rmxprt_tools.run_rmxprt_analysis,
+    "export_to_maxwell": rmxprt_tools.export_to_maxwell,
+    # P3 热-结构耦合工具
+    "import_thermal_to_mechanical": coupling_tools.import_thermal_to_mechanical,
+    # P3 场量可视化工具
+    "create_field_plot": visualization_tools.create_field_plot,
+    "export_field_image": visualization_tools.export_field_image,
+    "list_field_plots": visualization_tools.list_field_plots,
 }
 
 # ---------------------------------------------------------------------------
@@ -907,6 +946,462 @@ TOOL_DEFINITIONS = [
                     },
                 },
             },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 自定义材料工具定义（Maxwell）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "create_custom_material",
+            "description": "在 AEDT 材料库中创建自定义电磁材料，支持 B-H 曲线和铁耗系数（Steinmetz 模型）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "material_name": {"type": "string", "description": "材料名称；若已存在则覆盖修改"},
+                    "conductivity": {"type": "number", "description": "电导率（S/m），硅钢片典型值 1.9e6~2.0e6"},
+                    "mass_density": {"type": "number", "description": "质量密度（kg/m³），默认 7650"},
+                    "permeability": {"type": "number", "description": "相对磁导率（常数）；提供 bh_curve 时忽略"},
+                    "bh_curve": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "number"}},
+                        "description": "B-H 曲线数据点列表 [[H1,B1],[H2,B2],...]，H 单位 A/m，B 单位 T",
+                    },
+                    "core_loss_kh": {"type": "number", "description": "磁滞损耗系数 Kh（Steinmetz 模型）"},
+                    "core_loss_kc": {"type": "number", "description": "涡流损耗系数 Kc（Steinmetz 模型）"},
+                    "core_loss_ke": {"type": "number", "description": "附加损耗系数 Ke（Steinmetz 模型）"},
+                },
+                "required": ["material_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_bh_curve",
+            "description": "从 CSV 文件导入 B-H 数据到已有自定义材料（覆盖非线性磁导率）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "material_name": {"type": "string", "description": "目标材料名称（须已通过 create_custom_material 创建）"},
+                    "csv_path": {"type": "string", "description": "CSV 文件绝对路径"},
+                    "h_column": {"type": "integer", "description": "H 值所在列索引（从0开始），默认 0"},
+                    "b_column": {"type": "integer", "description": "B 值所在列索引（从0开始），默认 1"},
+                    "skip_header": {"type": "boolean", "description": "是否跳过首行标题，默认 true"},
+                },
+                "required": ["material_name", "csv_path"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 项目管理工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "save_project",
+            "description": "保存当前 AEDT 项目（原路径覆盖或另存为新路径）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "另存路径（含 .aedt 扩展名），留空则原路径保存"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_project",
+            "description": "在当前 AEDT 会话中打开已有项目文件（.aedt）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "项目 .aedt 文件绝对路径"},
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_project",
+            "description": "关闭指定项目（或当前活动项目），可选关闭前保存。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "项目名称，留空则关闭当前项目"},
+                    "save_first": {"type": "boolean", "description": "关闭前是否保存，默认 true"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_designs",
+            "description": "列出当前项目中所有设计的名称、数量及当前活动设计。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "copy_design",
+            "description": "在当前项目中复制一个设计，适用于多方案对比和参数研究。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_design": {"type": "string", "description": "源设计名称"},
+                    "new_name": {"type": "string", "description": "新设计名称"},
+                },
+                "required": ["source_design", "new_name"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 网格控制工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_length_mesh",
+            "description": "对指定几何体分配基于长度的网格细化操作（通用精度控制）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "object_names": {"type": "array", "items": {"type": "string"}, "description": "几何体名称列表"},
+                    "max_element_length": {"type": "number", "description": "最大单元边长（mm）"},
+                    "max_elements": {"type": "integer", "description": "最大单元数上限，None 不限制"},
+                    "operation_name": {"type": "string", "description": "网格操作名称，默认 LengthBased"},
+                },
+                "required": ["object_names", "max_element_length"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_skin_depth_mesh",
+            "description": "为导体/导磁体表面分配集肤深度细化（涡流/高频仿真必备）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "object_names": {"type": "array", "items": {"type": "string"}, "description": "几何体名称列表"},
+                    "skin_depth_mm": {"type": "number", "description": "集肤深度（mm）"},
+                    "max_triangle_length_mm": {"type": "number", "description": "表面三角形最大边长（mm），建议取 skin_depth 的 2~5 倍"},
+                    "num_layers": {"type": "integer", "description": "集肤深度内细化层数，默认 2"},
+                    "operation_name": {"type": "string", "description": "网格操作名称，默认 SkinDepth"},
+                },
+                "required": ["object_names", "skin_depth_mm", "max_triangle_length_mm"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_surface_mesh",
+            "description": "为圆弧/曲面几何（气隙、磁极弧面）分配曲面近似网格操作。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "object_names": {"type": "array", "items": {"type": "string"}, "description": "几何体名称列表"},
+                    "surface_quality": {"type": "integer", "description": "曲面质量等级 1~10，默认 8"},
+                    "operation_name": {"type": "string", "description": "网格操作名称，默认 SurfaceApprox"},
+                },
+                "required": ["object_names"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_mesh_stats",
+            "description": "获取指定求解设置的网格统计信息（单元数、节点数等），需在求解后调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 电磁-热耦合工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "link_maxwell_to_icepak",
+            "description": "将 Maxwell 仿真损耗（铁耗+铜耗）自动映射到 Icepak 热分析模型，替代手动填值，是全自动 EM-Thermal 耦合的关键步骤。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "maxwell_design_name": {"type": "string", "description": "Maxwell 设计名称；留空则使用当前活动设计"},
+                    "setup_name": {"type": "string", "description": "Maxwell 求解设置名称，默认 Setup1"},
+                    "use_spatial_distribution": {
+                        "type": "boolean",
+                        "description": "True 使用空间分布损耗映射（精度高，3D 推荐）；False 使用均匀平均值（速度快，2D 适用）",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_em_thermal_iteration",
+            "description": "运行 Maxwell-Icepak 耦合迭代：电磁→损耗映射→热仿真→温度反馈→重复，直至温度收敛。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "max_iterations": {"type": "integer", "description": "最大耦合迭代次数，推荐 2~5，默认 3"},
+                    "convergence_temp_delta": {"type": "number", "description": "收敛判据：相邻两轮最高温度差（°C），默认 1.0"},
+                    "maxwell_setup_name": {"type": "string", "description": "Maxwell 求解设置名称，默认 Setup1"},
+                    "icepak_setup_name": {"type": "string", "description": "Icepak 求解设置名称，默认 SetupThermal"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # P2 高级结果工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "get_inductance",
+            "description": "提取 PMSM d 轴电感 Ld 和 q 轴电感 Lq（通过相自感近似），返回各相自感及 Ld/Lq 估算值。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "扫描/时间步名称，默认 LastAdaptive"},
+                    "phases": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "三相名称列表，默认 ['PhaseA','PhaseB','PhaseC']",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_flux_linkage",
+            "description": "提取各相绕组磁链波形（ψA/ψB/ψC），并计算峰值和 dq 磁链分量（ψd、ψq）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "扫描名称，默认 LastAdaptive"},
+                    "phases": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "三相名称列表，默认 ['PhaseA','PhaseB','PhaseC']",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cogging_torque",
+            "description": "提取 PMSM 齿槽转矩波形及峰峰值，需在零电流参数化磁静态仿真完成后调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "参数扫描名称（转子位置扫描），默认 LastAdaptive"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_efficiency_map",
+            "description": "从二维参数扫描（转速×电流）结果聚合生成效率 MAP，返回各工况效率和最高效率点。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "speed_param": {"type": "string", "description": "转速参数变量名，默认 'Speed'"},
+                    "current_param": {"type": "string", "description": "电流参数变量名，默认 'Current'"},
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "参数扫描名称，空则使用全部"},
+                    "rated_voltage": {"type": "number", "description": "额定直流母线电压（V），默认 400"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_demagnetization",
+            "description": "校核永磁体在极端工况下的退磁安全裕量，自动识别磁体对象并计算温度修正后的 H-Hcb 安全系数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称（应为短路/过载工况），默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "扫描名称，默认 LastAdaptive"},
+                    "magnet_objects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "永磁体几何体名称列表；None 则自动搜索含 'Magnet'/'PM' 的对象",
+                    },
+                    "operating_temperature_C": {"type": "number", "description": "工作温度（°C），用于矫顽力温度修正，默认 120"},
+                    "safety_margin": {"type": "number", "description": "退磁安全裕量阈值（0~1），低于此值报警，默认 0.1"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # P3 RMXprt 快速初设计工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_rmxprt",
+            "description": "连接到 Ansys RMXprt 解析法电机设计模块，用于快速初始参数估算。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "AEDT 版本号，如 '2024.1'"},
+                    "non_graphical": {"type": "boolean", "description": "是否无界面运行"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_motor_from_template",
+            "description": "在 RMXprt 中使用解析法模板快速建立电机初始设计，获取性能预估（效率、转矩、电感等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "motor_type": {
+                        "type": "string",
+                        "enum": ["PMSM", "BLDC", "IM", "SRM", "PMDC", "SYN", "SYNRM"],
+                        "description": "电机类型：PMSM（永磁同步）、BLDC（无刷直流）、IM（感应）、SRM（开关磁阻）",
+                    },
+                    "stator_outer_diameter": {"type": "number", "description": "定子外径（mm）"},
+                    "stator_inner_diameter": {"type": "number", "description": "定子内径（mm）"},
+                    "rotor_outer_diameter": {"type": "number", "description": "转子外径（mm）"},
+                    "shaft_diameter": {"type": "number", "description": "轴径（mm）"},
+                    "stack_length": {"type": "number", "description": "铁芯轴向长度（mm）"},
+                    "num_poles": {"type": "integer", "description": "极数"},
+                    "num_slots": {"type": "integer", "description": "定子槽数"},
+                    "rated_speed": {"type": "number", "description": "额定转速（rpm）"},
+                    "rated_voltage": {"type": "number", "description": "额定线电压（V）"},
+                    "rated_power": {"type": "number", "description": "额定功率（W）"},
+                    "design_name": {"type": "string", "description": "设计名称"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_rmxprt_analysis",
+            "description": "运行 RMXprt 解析法仿真，快速获取效率、转矩、电感等性能预估值。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_to_maxwell",
+            "description": "将 RMXprt 初始设计导出为 Maxwell 2D/3D 精确 FEM 仿真模型（自动建立几何和激励）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "RMXprt 求解设置名称，默认 Setup1"},
+                    "is_2d": {"type": "boolean", "description": "True 导出 Maxwell 2D（推荐），False 导出 Maxwell 3D"},
+                    "maxwell_design_name": {"type": "string", "description": "Maxwell 中的设计名称；留空则自动命名"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # P3 热-结构耦合工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "import_thermal_to_mechanical",
+            "description": "将 Icepak 温度场结果导入 Mechanical 作为热载荷，用于计算热应力和热变形（需先运行热仿真）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "icepak_project_path": {"type": "string", "description": "Icepak 项目文件路径（.aedt）；留空则从当前项目推导"},
+                    "setup_name": {"type": "string", "description": "Icepak 求解设置名称，默认 SetupThermal"},
+                    "analysis_name": {"type": "string", "description": "Mechanical 分析名称，默认 'Static Structural'"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # P3 场量可视化工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "create_field_plot",
+            "description": "在 AEDT 后处理中创建场量彩色云图（B 磁通密度、H 磁场强度、J 电流密度、CoreLoss 铁耗密度等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "quantity": {
+                        "type": "string",
+                        "enum": ["B", "Bx", "By", "H", "J", "CoreLoss", "OhmicLoss", "Temperature", "StressX", "StressY"],
+                        "description": "场量名称；B 最常用（默认）",
+                    },
+                    "plot_name": {"type": "string", "description": "云图名称；留空则自动命名"},
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "扫描步名称，默认 LastAdaptive"},
+                    "object_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要绘制云图的几何体列表；None 则在所有对象上绘制",
+                    },
+                    "plot_on_surface": {"type": "boolean", "description": "True 为表面云图（默认），False 为体积云图（3D）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_field_image",
+            "description": "将场量云图导出为 PNG 图像文件（用于报告和文档）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plot_name": {"type": "string", "description": "云图名称（由 create_field_plot 创建）"},
+                    "output_path": {"type": "string", "description": "输出 PNG 文件路径"},
+                    "width": {"type": "integer", "description": "图像宽度（像素），默认 1920"},
+                    "height": {"type": "integer", "description": "图像高度（像素），默认 1080"},
+                    "orientation": {"type": "string", "description": "视角方向：XY/XZ/YZ/ISO；留空为当前视角"},
+                },
+                "required": ["plot_name", "output_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_field_plots",
+            "description": "列出当前设计中所有已创建的场量云图名称和场量类型。",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
