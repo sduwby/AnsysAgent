@@ -14,6 +14,8 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
+from agent.config_manager import run_config_wizard
+
 load_dotenv()
 
 console = Console()
@@ -22,12 +24,12 @@ VERSION = "0.1.0"
 WELCOME = (
     "[bold cyan]Ansys 电机仿真智能助手[/bold cyan]\n"
     "支持电磁仿真、热分析、NVH结构振动、Circuit联仿、参数化扫描与 optiSLang 优化\n"
-    "基于 AEDT 2024 + DeepSeek\n\n"
+    "基于 AEDT 2024，支持 DeepSeek / ChatGPT / Claude / Qwen / Gemini\n\n"
     "[dim]输入自然语言描述需求，例如：\n"
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  输入 /exit 或按 Ctrl+C 退出[/dim]"
+    "  输入 /config 修改 LLM 配置 | 输入 /exit 或按 Ctrl+C 退出[/dim]"
 )
 
 
@@ -97,6 +99,16 @@ def cli(prompt: str | None):
         if user_input.lower() in ("/exit", "/quit", "quit", "exit", "q", "退出"):
             console.print("[dim]再见。[/dim]")
             break
+        if user_input.lower() == "/config":
+            try:
+                run_config_wizard(console)
+                # 热重载 .env → 覆盖 os.environ → 重建 LLM 客户端
+                load_dotenv(override=True)
+                agent.reload_config()
+                console.print("[green]✓ 配置已生效[/green]")
+            except Exception as e:
+                console.print(f"[red]配置失败: {e}[/red]")
+            continue
 
         try:
             _stream_response(agent, user_input)

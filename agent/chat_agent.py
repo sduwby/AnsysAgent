@@ -1,5 +1,5 @@
 """
-对话 Agent：基于 DeepSeek（OpenAI 兼容接口）的主对话循环，支持工具调用。
+对话 Agent：基于多提供商（OpenAI 兼容接口）的主对话循环，支持工具调用。
 """
 
 from __future__ import annotations
@@ -13,15 +13,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from agent.config_manager import load_llm_config
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import TOOL_DEFINITIONS, TOOL_REGISTRY
 
 console = Console()
-
-# DeepSeek API 配置
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 # ---------------------------------------------------------------------------
 # ChatAgent 主类
@@ -29,13 +25,18 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 class ChatAgent:
     def __init__(self):
-        # 初始化 DeepSeek 客户端（OpenAI 兼容接口）
-        self.client = OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url=DEEPSEEK_BASE_URL,
-        )
-        self.model = DEEPSEEK_MODEL
+        self._init_client()
         self.history: list[dict] = []
+
+    def _init_client(self) -> None:
+        """从当前环境配置初始化 OpenAI 兼容客户端。"""
+        cfg = load_llm_config()
+        self.client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+        self.model = cfg.model
+
+    def reload_config(self) -> None:
+        """重新加载配置并重建客户端（保留对话历史）。"""
+        self._init_client()
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """执行指定工具，返回 JSON 字符串结果。"""
