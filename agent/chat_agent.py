@@ -177,23 +177,12 @@ class ChatAgent:
             self.history.append(msg.model_dump(exclude_unset=False))
 
             if not msg.tool_calls:
-                # 最终回复：用流式重新请求以获得逐 token 输出
-                # 先从历史中移除刚刚添加的非流式回复
-                self.history.pop()
-                stream = self._call_with_fallback(
-                    _create,
-                    max_tokens=4096,
-                    messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
-                    stream=True,
-                )
-                full_text = ""
-                for chunk in stream:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        full_text += delta.content
-                        yield delta.content
-                # 将完整回复存入历史
-                self.history.append({"role": "assistant", "content": full_text})
+                # 直接从非流式响应逐字符 yield，避免第二次 API 请求导致的
+                # token 浪费和结果不一致风险（第二次请求也可能返回工具调用）。
+                # history 在第 177 行已包含此条 assistant 消息，无需再追加。
+                content = msg.content or ""
+                for char in content:
+                    yield char
                 return
 
             # 有工具调用：通知调用方，执行工具

@@ -64,10 +64,19 @@ def connect_aedt(version: str = "2024.1", is_3d: bool = False, non_graphical: bo
 
 def create_maxwell_project(project_name: str, design_name: str = "Motor") -> dict:
     """创建新的 Maxwell 项目和设计。"""
+    import os
     try:
         app = _app()
+        # 确保 project_name 是带 .aedt 扩展名的合法路径
+        # save_project() 保存当前（新建）项目到指定路径，起到命名+持久化的作用
+        if not project_name.endswith(".aedt"):
+            project_name = project_name + ".aedt"
+        if not os.path.isabs(project_name):
+            project_name = os.path.join(os.getcwd(), project_name)
         app.save_project(project_name)
-        app.design_name = design_name
+        # 重命名当前激活设计
+        if app.design_list:
+            app.active_design.name = design_name
         return _ok(f"项目 '{project_name}' 已创建，设计名：'{design_name}'")
     except Exception as e:
         return _err(str(e))
@@ -123,7 +132,12 @@ def create_motor_geometry(
             name="Stator_Inner_Cut",
         )
         modeler.subtract("Stator_Outer", "Stator_Inner_Cut", keep_originals=False)
-        modeler.get_object_from_name("Stator_Outer").name = "Stator"
+        # subtract 后刷新对象缓存，确保跨 PyAEDT 版本均能通过原名找到对象
+        modeler.refresh_all_ids()
+        stator_obj = modeler.get_object_from_name("Stator_Outer")
+        if stator_obj is None:
+            raise RuntimeError("subtract 后未找到 Stator_Outer，请检查 PyAEDT 版本兼容性")
+        stator_obj.name = "Stator"
 
         # 转子轭部（环形）
         modeler.create_circle(
@@ -140,7 +154,11 @@ def create_motor_geometry(
             name="Rotor_Inner_Cut",
         )
         modeler.subtract("Rotor_Outer", "Rotor_Inner_Cut", keep_originals=False)
-        modeler.get_object_from_name("Rotor_Outer").name = "Rotor"
+        modeler.refresh_all_ids()
+        rotor_obj = modeler.get_object_from_name("Rotor_Outer")
+        if rotor_obj is None:
+            raise RuntimeError("subtract 后未找到 Rotor_Outer，请检查 PyAEDT 版本兼容性")
+        rotor_obj.name = "Rotor"
 
         # 气隙区域
         modeler.create_circle(
@@ -157,7 +175,11 @@ def create_motor_geometry(
             name="AirGap_Inner_Cut",
         )
         modeler.subtract("AirGap_Outer", "AirGap_Inner_Cut", keep_originals=False)
-        modeler.get_object_from_name("AirGap_Outer").name = "AirGap"
+        modeler.refresh_all_ids()
+        airgap_obj = modeler.get_object_from_name("AirGap_Outer")
+        if airgap_obj is None:
+            raise RuntimeError("subtract 后未找到 AirGap_Outer，请检查 PyAEDT 版本兼容性")
+        airgap_obj.name = "AirGap"
 
         # 表贴式永磁体：每极一块扇形面（外弧 + 内弧封闭多边形），磁极弧系数 0.85
         # 使用 create_polyline + cover_surface=True 生成 2D 面对象（而非 1D 弧线），
@@ -292,11 +314,22 @@ def setup_winding(
             conductors_type="Stranded",
             winding_name=phase_name,
         )
+        # 始终使用 "Current" 类型：
+        #   - 磁静态（frequency=0）：直流电流表达式 "XA"
+        #   - 瞬态/交流（frequency>0）：正弦电流表达式（Maxwell 内嵌函数）
+        # "External" 类型需要配合 Circuit 联仿，独立使用时 AEDT 会报配置错误。
+        if frequency > 0:
+            current_expr = (
+                f"{current_amplitude}*cos(2*pi*{frequency}*Time"
+                f"+{phase_angle}*pi/180)A"
+            )
+        else:
+            current_expr = f"{current_amplitude}A"
         app.assign_winding(
             coil_terminals=[phase_name],
             winding_name=phase_name,
-            winding_type="External" if frequency > 0 else "Current",
-            current_value=f"{current_amplitude}A",
+            winding_type="Current",
+            current_value=current_expr,
             phase_angle=f"{phase_angle}deg",
         )
         return _ok(f"绕组 '{phase_name}' 已配置：{current_amplitude}A @ {phase_angle}°")

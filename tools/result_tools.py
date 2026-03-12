@@ -8,6 +8,20 @@ from tools.maxwell_tools import _app
 from tools.utils import _ok, _err
 
 
+def _report_category(app) -> str:
+    """
+    根据当前 Maxwell 设计的求解类型自动选择报告类别。
+    瞬态仿真返回 "Transient"，磁静态/涡流等返回 "Standard"。
+    """
+    try:
+        sol_type = app.solution_type or ""
+        if "Transient" in sol_type:
+            return "Transient"
+    except Exception:
+        pass
+    return "Standard"
+
+
 # ---------------------------------------------------------------------------
 # 工具：get_torque - 提取转矩
 # ---------------------------------------------------------------------------
@@ -29,7 +43,7 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
         report = app.post.create_report(
             expressions=["Moving1.Torque"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
-            report_category="Transient",
+            report_category=_report_category(app),
             report_name=report_name,
         )
         data = report.get_solution_data()
@@ -63,7 +77,7 @@ def get_back_emf(
         report = app.post.create_report(
             expressions=[f"InducedVoltage({phase_name})"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
-            report_category="Transient",
+            report_category=_report_category(app),
             report_name=report_name,
         )
         data = report.get_solution_data()
@@ -123,7 +137,7 @@ def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
         report = app.post.create_report(
             expressions=expressions,
             setup_sweep_name=f"{setup_name} : {sweep_name}",
-            report_category="Transient",
+            report_category=_report_category(app),
             report_name=report_name,
         )
         data = report.get_solution_data()
@@ -273,7 +287,7 @@ def get_flux_linkage(
         report = app.post.create_report(
             expressions=expressions,
             setup_sweep_name=f"{setup_name} : {sweep_name}",
-            report_category="Transient",
+            report_category=_report_category(app),
             report_name=report_name,
         )
         data = report.get_solution_data()
@@ -400,9 +414,23 @@ def get_efficiency_map(
             try:
                 speed_rpm = float(variation.get(speed_param, 0))
                 current_A = float(variation.get(current_param, 0))
-                torque_Nm = float(variation.get("Torque", 0))
-                core_loss_W = float(variation.get("CoreLoss", 0))
-                copper_loss_W = float(variation.get("OhmicLoss", 0))
+                # 转矩表达式名在 create_2d_sweep 中为 "Moving1.Torque"（带运动体前缀），
+                # 此处兼容不同版本/配置下的多种可能键名
+                torque_Nm = float(
+                    variation.get("Moving1.Torque")
+                    or variation.get("Torque")
+                    or 0
+                )
+                core_loss_W = float(
+                    variation.get("CoreLoss")
+                    or variation.get("Core Loss")
+                    or 0
+                )
+                copper_loss_W = float(
+                    variation.get("OhmicLoss")
+                    or variation.get("Ohmic Loss")
+                    or 0
+                )
 
                 # 输出功率 Pout = T * ω（W）
                 omega = speed_rpm * 2 * 3.14159 / 60

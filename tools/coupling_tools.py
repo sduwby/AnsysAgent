@@ -132,6 +132,13 @@ def run_em_thermal_iteration(
         history = []    # 每轮 {"iteration": n, "max_temp_C": T, "delta_T": ΔT}
         prev_max_temp = None
 
+        # 在循环前创建 Icepak 求解设置（若已存在则直接复用，避免每轮重复创建报错）
+        existing_setup_names = [s.name for s in icepak_app.setups]
+        if icepak_setup_name not in existing_setup_names:
+            _setup = icepak_app.create_setup(icepak_setup_name)
+            _setup.props["Convergence Criteria - Max Iterations"] = 100
+            _setup.update()
+
         for iteration in range(1, max_iterations + 1):
             # Step 1：运行 Maxwell 仿真
             maxwell_app.analyze_setup(maxwell_setup_name)
@@ -146,9 +153,6 @@ def run_em_thermal_iteration(
                 return _err(f"损耗映射失败（第{iteration}轮）：{link_result.get('error')}")
 
             # Step 3：运行 Icepak 热仿真
-            setup = icepak_app.create_setup(icepak_setup_name)
-            setup.props["Convergence Criteria - Max Iterations"] = 100
-            setup.update()
             icepak_app.analyze_setup(icepak_setup_name)
 
             # Step 4：提取最高温度并判断收敛

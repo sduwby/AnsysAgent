@@ -107,9 +107,12 @@ def run_thermal_simulation(setup_name: str = "SetupThermal") -> dict:
     """运行 Icepak 稳态热仿真。"""
     try:
         app = _app()
-        setup = app.create_setup(setup_name)
-        setup.props["Convergence Criteria - Max Iterations"] = 100
-        setup.update()
+        # 若 setup 已存在则直接使用，避免重复创建报错
+        existing_names = [s.name for s in app.setups]
+        if setup_name not in existing_names:
+            setup = app.create_setup(setup_name)
+            setup.props["Convergence Criteria - Max Iterations"] = 100
+            setup.update()
         app.analyze_setup(setup_name)
         return _ok(f"热仿真 '{setup_name}' 完成")
     except Exception as e:

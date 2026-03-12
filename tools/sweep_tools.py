@@ -72,7 +72,8 @@ def create_parametric_sweep(
             step=step,
             variation_type="LinearStep",
         )
-        sweep.add_calculation(setup_name, "LastAdaptive", ["Torque", "CoreLoss"])
+        # Maxwell 2D 中转矩表达式须带运动体前缀 "Moving1."
+        sweep.add_calculation(setup_name, "LastAdaptive", ["Moving1.Torque", "CoreLoss"])
         sweep.update()
 
         return _ok({
@@ -193,7 +194,7 @@ def create_2d_sweep(
             values_list=param2_values,
             variation_type="SingleValues",
         )
-        sweep.add_calculation(setup_name, "LastAdaptive", ["Torque", "CoreLoss", "OhmicLoss"])
+        sweep.add_calculation(setup_name, "LastAdaptive", ["Moving1.Torque", "CoreLoss", "OhmicLoss"])
         sweep.update()
 
         return _ok({
