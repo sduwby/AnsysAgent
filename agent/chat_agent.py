@@ -32,6 +32,11 @@ def _is_fallback_error(exc: Exception) -> bool:
     return False
 
 
+def _is_payment_error(exc: Exception) -> bool:
+    """判断是否为余额不足错误 (402)。"""
+    return isinstance(exc, APIStatusError) and exc.status_code == 402
+
+
 # ---------------------------------------------------------------------------
 # ChatAgent 主类
 # ---------------------------------------------------------------------------
@@ -78,6 +83,10 @@ class ChatAgent:
         except Exception as e:
             if not _is_fallback_error(e):
                 raise
+            if _is_payment_error(e):
+                console.print(
+                    "[bold yellow]💸 遇到了一点问题，这个问题充钱就能解决[/bold yellow]"
+                )
             console.print(
                 f"[yellow]⚠ 主提供商 ({self._primary_provider}) 请求失败（{type(e).__name__}），"
                 f"尝试回退...[/yellow]"
@@ -91,7 +100,12 @@ class ChatAgent:
             except Exception as e:
                 if not _is_fallback_error(e):
                     raise
-                console.print(f"[yellow]  → {fb_name} 也失败（{type(e).__name__}），继续...[/yellow]")
+                if _is_payment_error(e):
+                    console.print(
+                        f"[bold yellow]💸 {fb_name} 也遇到了一点问题，这个问题充钱就能解决[/bold yellow]"
+                    )
+                else:
+                    console.print(f"[yellow]  → {fb_name} 也失败（{type(e).__name__}），继续...[/yellow]")
 
         raise RuntimeError("所有可用提供商均请求失败，请检查网络或 API 余额。")
 

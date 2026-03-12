@@ -3,6 +3,7 @@ AnsysAgent - Maxwell 电机电磁仿真助手
 安装后可用命令：ansys-agent
 """
 
+import random
 import sys
 from pathlib import Path
 
@@ -44,6 +45,57 @@ load_dotenv(_find_env_path())
 
 console = Console()
 VERSION = "0.1.0"
+
+# ---------------------------------------------------------------------------
+# 彩蛋素材
+# ---------------------------------------------------------------------------
+
+_COFFEE_ART = r"""
+        ( (         ) )
+      _____)_____(_____(
+     |   ___________   |
+     |  |           |  |
+     |  |   ☕ ☕   |  |
+     |  |___________|  |
+     |_________________|
+           |     |
+         [_______|_]
+"""
+
+_MOTOR_ART = r"""
+          ╔═══════════════════╗
+          ║  ┌─────────────┐  ║
+          ║  │  ╔═══════╗  │  ║
+     >>==>║  │  ║  ⚡●  ║──╫══>> τ
+          ║  │  ╚═══════╝  │  ║
+          ║  └─────────────┘  ║
+          ╚═══════════════════╝
+              🔄  PMSM 36S/6P
+"""
+
+_STARTUP_QUOTES = [
+    "今天也是元气满满地仿真的一天！🚀",
+    "磁场不会说谎，但收敛需要耐心。🧲",
+    "记住：网格越细，账期越长。📐",
+    "一切玄学问题都可以用更细的网格解决。",
+    "铁损也是损，省一分是一分。⚡",
+    "转矩脉动不大，大的是截止日期。📅",
+    "仿真跑完前，结果永远是薛定谔的猫。🐱",
+    "永磁体不会累，但工程师会。",
+]
+
+
+def _maybe_show_startup_egg() -> None:
+    """10% 概率在启动时显示一句工程师名言。"""
+    if random.random() < 0.1:
+        quote = random.choice(_STARTUP_QUOTES)
+        console.print(Panel(
+            f"[italic yellow]{quote}[/italic yellow]",
+            title="💡 今日格言",
+            border_style="dim yellow",
+            expand=False,
+        ))
+
 
 WELCOME = (
     "[bold cyan]Ansys 电机仿真智能助手[/bold cyan]\n"
@@ -110,6 +162,7 @@ def cli(prompt: str | None):
 
     # 交互模式
     console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
+    _maybe_show_startup_egg()
 
     while True:
         try:
@@ -123,6 +176,14 @@ def cli(prompt: str | None):
         if user_input.lower() in ("/exit", "/quit", "quit", "exit", "q", "退出"):
             console.print("[dim]再见。[/dim]")
             break
+        if user_input.lower() == "/coffee":
+            console.print(f"[yellow]{_COFFEE_ART}[/yellow]")
+            console.print("[bold yellow]⚡ 工程师加燃料完毕，继续仿真！[/bold yellow]")
+            continue
+        if user_input.lower() == "/motor":
+            console.print(f"[cyan]{_MOTOR_ART}[/cyan]")
+            console.print("[bold cyan]这就是你在仿真的东西，加油！💪[/bold cyan]")
+            continue
         if user_input.lower() == "/config":
             try:
                 run_config_wizard(console)
