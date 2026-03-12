@@ -26,7 +26,9 @@ a = Analysis(
     datas=[
         # gpt_tokenizer 词表数据
         *gpt_tokenizer_datas,
-        # .env.example 供用户参考（.env 本身不打包）
+        # .env 内置配置（含 API Key），打包时自动打入；exe 同级目录的 .env 优先级更高
+        (".env", "."),
+        # .env.example 供用户参考
         (".env.example", "."),
     ],
     hiddenimports=[
