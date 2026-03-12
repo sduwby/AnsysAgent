@@ -1,7 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller 打包配置
 # Windows: pyinstaller ansys-agent.spec
-# macOS:   pyinstaller ansys-agent.spec
 
 import sys
 from pathlib import Path

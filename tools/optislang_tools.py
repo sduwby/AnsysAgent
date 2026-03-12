@@ -3,7 +3,7 @@ optiSLang 工具：通过 ansys-optislang-core 接口驱动参数优化与敏感
 每个函数返回包含 'success'、'result' 和可选 'error' 字段的字典。
 
 依赖：pip install ansys-optislang-core
-平台：仅支持 Windows（ansys-optislang-core 需 Windows/Linux 环境）
+平台：仅支持 Windows（ansys-optislang-core 需 Windows 环境）
 """
 
 from __future__ import annotations

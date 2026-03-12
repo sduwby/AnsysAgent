@@ -48,20 +48,20 @@ optiSLang 多目标优化 → Fluent CFD 流体分析 → 报告 + 场云图
 ## 环境要求
 
 - Python 3.10+
-- Ansys AEDT 2024 R1/R2（Windows/Linux，仿真功能必须）
+- Windows 10/11（64位）
+- Ansys AEDT 2024 R1/R2（仿真功能必须）
 - Ansys Fluent 2023 R2+（流体分析可选）
-- macOS 可用于对话测试和报告生成
 
 ## 安装
 
-```bash
+```bat
 # 克隆项目
 git clone <repo-url>
 cd AnsysAgent
 
 # 创建虚拟环境
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate
 
 # 安装依赖
 pip install -e .
@@ -127,12 +127,8 @@ You: 导出磁密云图，生成 HTML 报告
 
 ## 打包（可执行文件）
 
-```bash
-# macOS
-bash build.sh
-# 输出：dist/ansys-agent
-
-# Windows（需在 Windows 上运行）
+```bat
+# Windows
 build.bat
 # 输出：dist\ansys-agent.exe
 ```
@@ -164,14 +160,13 @@ AnsysAgent/
 │   ├── visualization_tools.py # 场云图可视化
 │   └── utils.py               # 共享辅助函数
 ├── docs/api/                  # PyAEDT/PyFluent API 速查表 PDF
-├── build.sh                   # macOS 打包脚本
 ├── build.bat                  # Windows 打包脚本
 └── ansys-agent.spec           # PyInstaller 配置
 ```
 
 ## 注意事项
 
-- `ansys-aedt-core` 仅支持 Windows/Linux，macOS 只能进行纯对话
+- `ansys-aedt-core` 仅支持 Windows，需本机安装 Ansys AEDT
 - `ansys-fluent-core` 需要 Fluent 2023 R2+（`ansys-fluent-core>=0.20.0`）
 - optiSLang 工具需要额外安装 `ansys-optislang-core`
 - 首次运行需要 AEDT/Fluent 已启动并处于运行状态
