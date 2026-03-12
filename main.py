@@ -17,6 +17,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from agent.config_manager import run_config_wizard
+from agent.logger import setup_logging, get_logger
 
 
 def _find_env_path() -> Path:
@@ -42,6 +43,10 @@ def _find_env_path() -> Path:
 
 
 load_dotenv(_find_env_path())
+
+# 初始化文件日志（加载 .env 之后立即执行）
+setup_logging()
+_log = get_logger("main")
 
 console = Console()
 VERSION = "0.1.0"
@@ -109,8 +114,8 @@ WELCOME = (
 )
 
 
-def _stream_response(agent, user_input: str) -> None:
-    """流式渲染 agent 回复，工具调用实时显示。"""
+def _stream_response(agent, user_input: str) -> str:
+    """流式渲染 agent 回复，工具调用实时显示。返回完整回复文本（用于日志）。"""
     text_buf = ""
     in_text = False
 
@@ -137,6 +142,8 @@ def _stream_response(agent, user_input: str) -> None:
     if in_text:
         console.print()  # 最后换行
 
+    return text_buf
+
 
 @click.command()
 @click.version_option(VERSION, prog_name="ansys-agent")
@@ -153,14 +160,18 @@ def cli(prompt: str | None):
 
     if prompt:
         # 单次执行模式：ansys-agent -p "..."
+        _log.info("单次执行模式 | 指令: %s", prompt)
         try:
-            _stream_response(agent, prompt)
+            reply = _stream_response(agent, prompt)
+            _log.info("回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
         except Exception as e:
+            _log.error("单次执行失败: %s", e, exc_info=True)
             console.print(f"[red]错误: {e}[/red]")
             sys.exit(1)
         return
 
     # 交互模式
+    _log.info("进入交互模式")
     console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
     _maybe_show_startup_egg()
 
@@ -169,12 +180,14 @@ def cli(prompt: str | None):
             user_input = Prompt.ask("\n[bold green]用户[/bold green]").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]再见。[/dim]")
+            _log.info("用户退出（KeyboardInterrupt/EOFError）")
             break
 
         if not user_input:
             continue
         if user_input.lower() in ("/exit", "/quit", "quit", "exit", "q", "退出"):
             console.print("[dim]再见。[/dim]")
+            _log.info("用户主动退出")
             break
         if user_input.lower() == "/coffee":
             console.print(f"[yellow]{_COFFEE_ART}[/yellow]")
@@ -191,15 +204,21 @@ def cli(prompt: str | None):
                 load_dotenv(override=True)
                 agent.reload_config()
                 console.print("[green]✓ 配置已生效[/green]")
+                _log.info("LLM 配置已变更并热重载")
             except Exception as e:
+                _log.error("配置变更失败: %s", e, exc_info=True)
                 console.print(f"[red]配置失败: {e}[/red]")
             continue
 
+        _log.info("用户输入: %s", user_input)
         try:
-            _stream_response(agent, user_input)
+            reply = _stream_response(agent, user_input)
+            _log.info("Agent 回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
         except KeyboardInterrupt:
             console.print("\n[yellow]已中断。[/yellow]")
+            _log.warning("用户中断了当前请求")
         except Exception as e:
+            _log.error("处理用户输入时出错: %s", e, exc_info=True)
             console.print(f"[red]错误: {e}[/red]")
 
 

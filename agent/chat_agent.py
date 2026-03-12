@@ -16,8 +16,10 @@ from rich.panel import Panel
 from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get_provider_api_key
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import TOOL_DEFINITIONS, TOOL_REGISTRY
+from agent.logger import get_logger
 
 console = Console()
+_log = get_logger("chat_agent")
 
 # 触发回退的错误码（限速 / 余额不足）
 _FALLBACK_STATUS_CODES = {429, 402, 503}
@@ -38,6 +40,39 @@ def _is_payment_error(exc: Exception) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 上下文 token 估算
+# ---------------------------------------------------------------------------
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """
+    粗略估算消息列表的 token 数量。
+    中英文混合场景按字符数 // 2 估算（偏保守）。
+    """
+    total_chars = 0
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            # tool_calls 等结构化内容
+            content = json.dumps(content, ensure_ascii=False)
+        total_chars += len(content)
+    return total_chars // 2
+
+
+_COMPRESS_THRESHOLD = 40_000   # 超过此 token 数触发压缩
+_KEEP_RECENT = 20              # 压缩后保留的最新消息条数
+
+_COMPRESS_SYSTEM = (
+    "你是一个专业的工程对话摘要助手。"
+    "请将下面的对话历史压缩为简洁摘要，必须保留：\n"
+    "1. 所有仿真参数（几何尺寸、材料、绕组参数等）\n"
+    "2. 用户的关键操作步骤和意图\n"
+    "3. 重要的数值结果（转矩、效率、温升、应力等）\n"
+    "4. 已完成的操作和当前状态\n"
+    "摘要用中文输出，不超过 800 字。"
+)
+
+
+# ---------------------------------------------------------------------------
 # ChatAgent 主类
 # ---------------------------------------------------------------------------
 
@@ -45,6 +80,45 @@ class ChatAgent:
     def __init__(self):
         self._init_client()
         self.history: list[dict] = []
+
+    def _maybe_compress_history(self) -> None:
+        """
+        若历史消息估算 token 超过阈值，将旧消息压缩为摘要。
+        保留最近 _KEEP_RECENT 条消息，旧消息发给 LLM 生成摘要后以 user 角色插入。
+        """
+        if _estimate_tokens(self.history) <= _COMPRESS_THRESHOLD:
+            return
+        if len(self.history) <= _KEEP_RECENT:
+            return
+
+        old_msgs = self.history[:-_KEEP_RECENT]
+        recent_msgs = self.history[-_KEEP_RECENT:]
+
+        # 将旧消息序列化为文本供 LLM 压缩
+        old_text = "\n".join(
+            f"[{m['role'].upper()}] {m.get('content') or ''}" for m in old_msgs
+        )
+        compress_request = [{"role": "user", "content": f"请压缩以下对话历史：\n\n{old_text}"}]
+
+        try:
+            _log.info("触发历史压缩，旧消息 %d 条，估算 token %d",
+                      len(old_msgs), _estimate_tokens(old_msgs))
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": _COMPRESS_SYSTEM}] + compress_request,
+                max_tokens=1024,
+            )
+            summary = resp.choices[0].message.content or ""
+            summary_msg = {
+                "role": "user",
+                "content": f"[以下是之前对话的摘要，请在后续回复中参考]\n{summary}",
+            }
+            self.history = [summary_msg] + recent_msgs
+            _log.info("历史压缩完成，摘要 %d 字，保留最近 %d 条消息", len(summary), len(recent_msgs))
+            console.print(f"[dim]📦 上下文已压缩（保留最近 {_KEEP_RECENT} 条）[/dim]")
+        except Exception as e:
+            # 压缩失败不影响主流程，仅记录警告
+            _log.warning("历史压缩失败，跳过: %s", e)
 
     def _init_client(self) -> None:
         """从当前环境配置初始化主客户端，并预构建回退客户端列表。"""
@@ -82,11 +156,15 @@ class ChatAgent:
             return call_fn(self.client, self.model, **kwargs)
         except Exception as e:
             if not _is_fallback_error(e):
+                _log.error("API 请求异常（非回退类）: %s", e, exc_info=True)
                 raise
             if _is_payment_error(e):
+                _log.warning("提供商 %s 余额不足 (402)", self._primary_provider)
                 console.print(
                     "[bold yellow]💸 遇到了一点问题，这个问题充钱就能解决[/bold yellow]"
                 )
+            else:
+                _log.warning("提供商 %s 触发回退: %s", self._primary_provider, type(e).__name__)
             console.print(
                 f"[yellow]⚠ 主提供商 ({self._primary_provider}) 请求失败（{type(e).__name__}），"
                 f"尝试回退...[/yellow]"
@@ -95,34 +173,48 @@ class ChatAgent:
         # 依次尝试回退提供商
         for fb_client, fb_model, fb_name in self._fallback_clients:
             try:
+                _log.info("回退切换到: %s (%s)", fb_name, fb_model)
                 console.print(f"[dim]  → 切换到 {fb_name} ({fb_model})[/dim]")
                 return call_fn(fb_client, fb_model, **kwargs)
             except Exception as e:
                 if not _is_fallback_error(e):
+                    _log.error("回退提供商 %s 异常（非回退类）: %s", fb_name, e, exc_info=True)
                     raise
                 if _is_payment_error(e):
+                    _log.warning("回退提供商 %s 余额不足 (402)", fb_name)
                     console.print(
                         f"[bold yellow]💸 {fb_name} 也遇到了一点问题，这个问题充钱就能解决[/bold yellow]"
                     )
                 else:
+                    _log.warning("回退提供商 %s 失败: %s", fb_name, type(e).__name__)
                     console.print(f"[yellow]  → {fb_name} 也失败（{type(e).__name__}），继续...[/yellow]")
 
+        _log.error("所有提供商均请求失败")
         raise RuntimeError("所有可用提供商均请求失败，请检查网络或 API 余额。")
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """执行指定工具，返回 JSON 字符串结果。"""
         fn = TOOL_REGISTRY.get(tool_name)
         if fn is None:
+            _log.warning("未知工具: %s", tool_name)
             return json.dumps({"success": False, "error": f"未知工具: {tool_name}"})
+        _log.info("调用工具: %s | 参数: %s", tool_name, json.dumps(tool_input, ensure_ascii=False))
         try:
             result = fn(**tool_input)
-            return json.dumps(result, ensure_ascii=False)
+            result_str = json.dumps(result, ensure_ascii=False)
+            if result.get("success"):
+                _log.info("工具 %s 成功: %s", tool_name, str(result.get("result", ""))[:200])
+            else:
+                _log.warning("工具 %s 失败: %s", tool_name, result.get("error", ""))
+            return result_str
         except Exception as e:
+            _log.error("工具 %s 执行异常: %s", tool_name, e, exc_info=True)
             return json.dumps({"success": False, "error": str(e)})
 
     def chat(self, user_message: str) -> str:
         """发送用户消息，返回最终 Assistant 回复（非流式）。"""
         self.history.append({"role": "user", "content": user_message})
+        self._maybe_compress_history()
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
@@ -173,6 +265,7 @@ class ChatAgent:
         工具调用期间会 yield 特殊前缀 '\r\x00TOOL\x00' 开头的状态行。
         """
         self.history.append({"role": "user", "content": user_message})
+        self._maybe_compress_history()
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
