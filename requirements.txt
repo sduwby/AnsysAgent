@@ -1,10 +1,22 @@
-# Ansys PyAEDT - Electronics Desktop Python 接口
+# Ansys PyAEDT - Electronics Desktop Python 接口（Maxwell/Icepak/Circuit/RMXprt）
 ansys-aedt-core>=0.13.0
 
 # Ansys PyFluent - Fluent CFD Python 接口
 ansys-fluent-core>=0.20.0
 
-# LLM 客户端（使用 OpenAI 兼容接口，对接 DeepSeek）
+# Ansys PyMotorCAD - Motor-CAD 解析法电机初设计（EM/热/NVH）
+ansys-motorcad-core>=0.7.0
+
+# Ansys PyMAPDL - MAPDL 结构强度、热应力、NVH 谐响应分析
+ansys-mapdl-core>=0.68.0
+
+# Ansys PyDPF-Post - 仿真结果后处理（应力/温度/位移场提取）
+ansys-dpf-post>=0.7.0
+
+# Ansys PyDynamicReporting - 自动化报告生成（HTML/PDF）
+ansys-dynamicreporting-core>=0.8.0
+
+# LLM 客户端（使用 OpenAI 兼容接口，对接 DeepSeek/Qwen/GLM/MiniMax 等）
 openai>=1.30.0
 
 # CLI 框架
@@ -13,3 +25,4 @@ click>=8.1.0
 # 工具库
 python-dotenv>=1.0.0
 rich>=13.0.0          # 终端格式化输出
+

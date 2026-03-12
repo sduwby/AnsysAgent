@@ -20,6 +20,10 @@ from tools import (
     coupling_tools,
     rmxprt_tools,
     visualization_tools,
+    motorcad_tools,
+    mapdl_tools,
+    dpf_tools,
+    dynamic_reporting_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -120,6 +124,35 @@ TOOL_REGISTRY: dict[str, callable] = {
     "create_field_plot": visualization_tools.create_field_plot,
     "export_field_image": visualization_tools.export_field_image,
     "list_field_plots": visualization_tools.list_field_plots,
+    # Motor-CAD 解析法初设计工具
+    "connect_motorcad": motorcad_tools.connect_motorcad,
+    "set_motorcad_geometry": motorcad_tools.set_motorcad_geometry,
+    "run_motorcad_em_analysis": motorcad_tools.run_motorcad_em_analysis,
+    "run_motorcad_thermal_analysis": motorcad_tools.run_motorcad_thermal_analysis,
+    "run_motorcad_nvh_analysis": motorcad_tools.run_motorcad_nvh_analysis,
+    "get_motorcad_performance_map": motorcad_tools.get_motorcad_performance_map,
+    "export_motorcad_to_maxwell": motorcad_tools.export_motorcad_to_maxwell,
+    "disconnect_motorcad": motorcad_tools.disconnect_motorcad,
+    # PyMAPDL 结构强度 / NVH 工具
+    "connect_mapdl": mapdl_tools.connect_mapdl,
+    "run_rotor_stress_analysis": mapdl_tools.run_rotor_stress_analysis,
+    "run_thermal_stress_analysis": mapdl_tools.run_thermal_stress_analysis,
+    "run_nvh_harmonic_analysis": mapdl_tools.run_nvh_harmonic_analysis,
+    "get_mapdl_structural_results": mapdl_tools.get_mapdl_structural_results,
+    "disconnect_mapdl": mapdl_tools.disconnect_mapdl,
+    # PyDPF-Post 结果后处理工具
+    "load_dpf_result": dpf_tools.load_dpf_result,
+    "get_dpf_stress": dpf_tools.get_dpf_stress,
+    "get_dpf_temperature": dpf_tools.get_dpf_temperature,
+    "get_dpf_displacement": dpf_tools.get_dpf_displacement,
+    "get_dpf_field_statistics": dpf_tools.get_dpf_field_statistics,
+    "export_dpf_results_to_csv": dpf_tools.export_dpf_results_to_csv,
+    # 自动化报告生成工具
+    "create_report_session": dynamic_reporting_tools.create_report_session,
+    "add_report_section": dynamic_reporting_tools.add_report_section,
+    "add_table_to_report": dynamic_reporting_tools.add_table_to_report,
+    "add_image_to_report": dynamic_reporting_tools.add_image_to_report,
+    "export_report": dynamic_reporting_tools.export_report,
 }
 
 # ---------------------------------------------------------------------------
@@ -1402,6 +1435,396 @@ TOOL_DEFINITIONS = [
             "name": "list_field_plots",
             "description": "列出当前设计中所有已创建的场量云图名称和场量类型。",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # Motor-CAD 解析法初设计工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_motorcad",
+            "description": "连接到 Ansys Motor-CAD 实例，用于快速解析法电机初设计（EM/热/NVH）。在使用所有 motorcad_* 工具之前必须先调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "Motor-CAD RPC 端口；0 表示自动（推荐）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_motorcad_geometry",
+            "description": "在 Motor-CAD 中设置电机几何参数（外径、内径、叠长、极槽数等），适用于 PMSM/BLDC/IM。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stator_outer_diam": {"type": "number", "description": "定子外径（mm）"},
+                    "stator_inner_diam": {"type": "number", "description": "定子内径（mm）"},
+                    "rotor_outer_diam": {"type": "number", "description": "转子外径（mm）"},
+                    "shaft_diam": {"type": "number", "description": "转轴直径（mm）"},
+                    "stack_length": {"type": "number", "description": "轴向叠片长度（mm）"},
+                    "num_poles": {"type": "integer", "description": "极数（偶数）"},
+                    "num_slots": {"type": "integer", "description": "定子槽数"},
+                    "motor_type": {"type": "string", "description": "电机类型：PMSM / BLDC / IM，默认 PMSM"},
+                },
+                "required": ["stator_outer_diam", "stator_inner_diam", "rotor_outer_diam",
+                             "shaft_diam", "stack_length", "num_poles", "num_slots"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_motorcad_em_analysis",
+            "description": "在 Motor-CAD 中运行电磁（Emag）解析仿真，快速获取转矩、效率、反电动势、铁耗铜耗等性能指标。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rated_speed_rpm": {"type": "number", "description": "额定转速（rpm），默认 3000"},
+                    "rated_current_A": {"type": "number", "description": "相电流峰值（A），默认 10"},
+                    "current_angle_deg": {"type": "number", "description": "电流超前角（度），默认 45"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_motorcad_thermal_analysis",
+            "description": "在 Motor-CAD 热网络模块中运行稳态热分析，评估绕组、铁芯、磁体各部件温升。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cooling_type": {"type": "string", "description": "冷却方式：TEFC（自冷）/ WJ（水套）/ OilSpray（喷油），默认 TEFC"},
+                    "ambient_temp_C": {"type": "number", "description": "环境温度（°C），默认 25"},
+                    "coolant_flow_rate": {"type": "number", "description": "冷却液流量（L/min），水套冷却时有效"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_motorcad_nvh_analysis",
+            "description": "在 Motor-CAD 中运行 NVH 分析，预测电磁径向力、齿槽转矩峰值和主要力波次数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "speed_rpm": {"type": "number", "description": "分析转速（rpm），默认 3000"},
+                    "freq_max_Hz": {"type": "number", "description": "最高分析频率（Hz），默认 5000"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_motorcad_performance_map",
+            "description": "在 Motor-CAD Lab 模块中计算全工况效率 MAP，返回转速-转矩-效率三维数据。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "speed_points": {"type": "integer", "description": "转速扫描点数，默认 10"},
+                    "torque_points": {"type": "integer", "description": "转矩扫描点数，默认 10"},
+                    "max_speed_rpm": {"type": "number", "description": "最高转速（rpm），默认 6000"},
+                    "max_torque_Nm": {"type": "number", "description": "最大转矩（Nm），默认 50"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_motorcad_to_maxwell",
+            "description": "将 Motor-CAD 当前设计导出为 Maxwell 2D/3D FEM 模型，实现解析初设计 → 精确仿真工作流。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_dir": {"type": "string", "description": "导出目录（空则用 Motor-CAD 默认目录）"},
+                    "is_2d": {"type": "boolean", "description": "True 导出 Maxwell 2D（快），False 导出 Maxwell 3D（含端部效应）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "disconnect_motorcad",
+            "description": "断开 Motor-CAD 连接并释放许可证。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # PyMAPDL 结构强度 / NVH 工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_mapdl",
+            "description": "连接到 MAPDL 求解器（本地启动或远程连接），用于电机结构强度、热应力和 NVH 谐响应分析。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "gRPC 端口号，默认 50052"},
+                    "server": {"type": "string", "description": "MAPDL 服务器地址，本地启动时忽略"},
+                    "launch_local": {"type": "boolean", "description": "True 本地启动，False 连接远程，默认 True"},
+                    "nproc": {"type": "integer", "description": "并行核心数（本地启动有效），默认 4"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_rotor_stress_analysis",
+            "description": "在 MAPDL 中建立轴对称转子模型，计算高转速离心应力，用于校核转子铁芯和永磁体结构安全性。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rotor_outer_radius_mm": {"type": "number", "description": "转子外径（mm）"},
+                    "rotor_inner_radius_mm": {"type": "number", "description": "转子内径/轴径（mm）"},
+                    "stack_length_mm": {"type": "number", "description": "叠片长度（mm）"},
+                    "speed_rpm": {"type": "number", "description": "转速（rpm）"},
+                    "material": {"type": "string", "description": "材料名称（注释用），默认 Steel"},
+                    "density_kg_m3": {"type": "number", "description": "密度（kg/m³），默认 7850"},
+                    "youngs_modulus_GPa": {"type": "number", "description": "杨氏模量（GPa），默认 200"},
+                    "poisson_ratio": {"type": "number", "description": "泊松比，默认 0.3"},
+                },
+                "required": ["rotor_outer_radius_mm", "rotor_inner_radius_mm", "stack_length_mm", "speed_rpm"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_thermal_stress_analysis",
+            "description": "将热仿真（Icepak/Motor-CAD）输出的温度分布导入 MAPDL，计算热应力和热变形。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "temperature_csv_path": {"type": "string", "description": "温度分布 CSV 文件路径（含坐标和温度列）"},
+                    "material": {"type": "string", "description": "材料名称，默认 Steel"},
+                    "thermal_expansion_coeff": {"type": "number", "description": "热膨胀系数（/°C），钢约 12e-6"},
+                    "youngs_modulus_GPa": {"type": "number", "description": "杨氏模量（GPa），默认 200"},
+                    "ref_temp_C": {"type": "number", "description": "参考温度（°C），默认 20"},
+                },
+                "required": ["temperature_csv_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_nvh_harmonic_analysis",
+            "description": "在 MAPDL 中运行谐响应 NVH 分析，评估电机定子在电磁激励力下的振动响应，识别共振风险。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "freq_start_Hz": {"type": "number", "description": "起始频率（Hz），默认 0"},
+                    "freq_end_Hz": {"type": "number", "description": "终止频率（Hz），默认 5000"},
+                    "freq_steps": {"type": "integer", "description": "频率步数，默认 200"},
+                    "damping_ratio": {"type": "number", "description": "阻尼比，钢结构约 0.01~0.03，默认 0.02"},
+                    "force_amplitude_N": {"type": "number", "description": "电磁径向力幅值（N），默认 100"},
+                    "force_frequency_Hz": {"type": "number", "description": "主激励频率（Hz），通常为电气次数×电频率"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_mapdl_structural_results",
+            "description": "从最近一次 MAPDL 分析中提取结构结果（应力/变形/固有频率）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_type": {"type": "string", "description": "stress（应力）/ deformation（变形）/ frequency（固有频率），默认 stress"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "disconnect_mapdl",
+            "description": "退出 MAPDL 进程并释放资源。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # PyDPF-Post 结果后处理工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "load_dpf_result",
+            "description": "加载 MAPDL/Mechanical 仿真结果文件（.rst），初始化 DPF 后处理会话，返回网格信息。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_file_path": {"type": "string", "description": "结果文件绝对路径（.rst 格式）"},
+                },
+                "required": ["result_file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dpf_stress",
+            "description": "从 DPF 结果中提取应力场（von Mises 或单轴分量），返回最大/最小/平均值（MPa）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_set": {"type": "integer", "description": "时间步编号，从 1 开始，默认 1"},
+                    "component": {"type": "string", "description": "EQV（等效）/ X / Y / Z / XY / YZ / XZ，默认 EQV"},
+                    "location": {"type": "string", "description": "Nodal（节点）或 Elemental（单元），默认 Nodal"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dpf_temperature",
+            "description": "从 DPF 结果中提取温度场分布，返回最大/最小/平均温度（°C）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_set": {"type": "integer", "description": "时间步编号，从 1 开始，默认 1"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dpf_displacement",
+            "description": "从 DPF 结果中提取位移/变形场，返回最大/最小/平均变形量（mm）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_set": {"type": "integer", "description": "时间步编号，默认 1"},
+                    "component": {"type": "string", "description": "NORM（合位移）/ X / Y / Z，默认 NORM"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dpf_field_statistics",
+            "description": "获取任意场量（应力/温度/位移/弹性应变）在指定时间步的统计汇总（最大/最小/平均）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "field_name": {"type": "string", "description": "场量名称：stress / temperature / displacement / elastic_strain"},
+                    "result_set": {"type": "integer", "description": "时间步编号，默认 1"},
+                },
+                "required": ["field_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_dpf_results_to_csv",
+            "description": "将 DPF 场量数据（应力/温度/位移）导出为 CSV 文件，便于 Excel 或 Python 进一步处理。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出 CSV 文件路径（含文件名）"},
+                    "field_name": {"type": "string", "description": "场量名称：stress / temperature / displacement，默认 stress"},
+                    "result_set": {"type": "integer", "description": "时间步编号，默认 1"},
+                },
+                "required": ["output_path"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 自动化报告生成工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "create_report_session",
+            "description": "初始化电机仿真分析报告会话，后续可向报告中添加文本、表格、图片等内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "报告标题，默认'电机仿真分析报告'"},
+                    "output_dir": {"type": "string", "description": "报告输出目录；为空则使用当前目录"},
+                    "use_adr": {"type": "boolean", "description": "True 尝试使用 Ansys Dynamic Reporting，False 使用内置 HTML 模板"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_report_section",
+            "description": "向报告中添加一个文本节（标题+正文），用于描述仿真目的、方法或结论。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "小节标题"},
+                    "content": {"type": "string", "description": "正文内容"},
+                    "level": {"type": "integer", "description": "标题级别：2=H2，3=H3，默认 2"},
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_table_to_report",
+            "description": "向报告中插入数据表格，data 为字典列表（每个字典一行，key 为列名）。适合展示仿真结果汇总。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "表格数据，格式为 [{列名: 值, ...}, ...]",
+                    },
+                    "table_title": {"type": "string", "description": "表格标题，默认'数据表格'"},
+                },
+                "required": ["data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_image_to_report",
+            "description": "向报告中插入图片（仿真云图、效率 MAP 截图等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {"type": "string", "description": "图片文件绝对路径（PNG/JPG/SVG）"},
+                    "caption": {"type": "string", "description": "图片说明文字"},
+                    "width_pct": {"type": "integer", "description": "页面宽度百分比（1~100），默认 80"},
+                },
+                "required": ["image_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_report",
+            "description": "将当前报告导出为 HTML 或 PDF 文件，汇总所有仿真结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "description": "输出格式：html 或 pdf，默认 html"},
+                    "filename": {"type": "string", "description": "输出文件名（不含扩展名），默认 motor_analysis_report"},
+                },
+            },
         },
     },
 ]
