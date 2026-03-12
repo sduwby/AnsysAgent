@@ -58,7 +58,7 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return total_chars // 2
 
 
-_COMPRESS_THRESHOLD = 40_000   # 超过此 token 数触发压缩
+_COMPRESS_THRESHOLD = 80_000   # 超过此 token 数触发压缩
 _KEEP_RECENT = 20              # 压缩后保留的最新消息条数
 
 _COMPRESS_SYSTEM = (
