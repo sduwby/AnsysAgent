@@ -8,16 +8,29 @@ import json
 import os
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError, APIStatusError
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from agent.config_manager import load_llm_config
+from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get_provider_api_key
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import TOOL_DEFINITIONS, TOOL_REGISTRY
 
 console = Console()
+
+# 触发回退的错误码（限速 / 余额不足）
+_FALLBACK_STATUS_CODES = {429, 402, 503}
+
+
+def _is_fallback_error(exc: Exception) -> bool:
+    """判断异常是否应触发回退到下一个提供商。"""
+    if isinstance(exc, RateLimitError):
+        return True
+    if isinstance(exc, APIStatusError) and exc.status_code in _FALLBACK_STATUS_CODES:
+        return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # ChatAgent 主类
@@ -29,14 +42,58 @@ class ChatAgent:
         self.history: list[dict] = []
 
     def _init_client(self) -> None:
-        """从当前环境配置初始化 OpenAI 兼容客户端。"""
+        """从当前环境配置初始化主客户端，并预构建回退客户端列表。"""
         cfg = load_llm_config()
         self.client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
         self.model = cfg.model
+        self._primary_provider = cfg.provider
+        self._primary_model = cfg.model
+        # 预构建回退链客户端 [(client, model, provider_name), ...]
+        self._fallback_clients: list[tuple[OpenAI, str, str]] = []
+        for provider_key in FALLBACK_CHAIN:
+            if provider_key == cfg.provider:
+                continue  # 跳过与主提供商相同的
+            pinfo = PROVIDERS.get(provider_key)
+            if not pinfo:
+                continue
+            api_key = get_provider_api_key(provider_key)
+            if not api_key:
+                continue
+            fb_client = OpenAI(api_key=api_key, base_url=pinfo["base_url"])
+            fb_model = pinfo["models"][0]
+            self._fallback_clients.append((fb_client, fb_model, pinfo["name"]))
 
     def reload_config(self) -> None:
         """重新加载配置并重建客户端（保留对话历史）。"""
         self._init_client()
+
+    def _call_with_fallback(self, call_fn, *args, **kwargs):
+        """
+        执行 call_fn(client, model, *args, **kwargs)，失败时按回退链重试。
+        call_fn 签名：call_fn(client: OpenAI, model: str, **kwargs) -> response
+        """
+        # 先用主客户端尝试
+        try:
+            return call_fn(self.client, self.model, **kwargs)
+        except Exception as e:
+            if not _is_fallback_error(e):
+                raise
+            console.print(
+                f"[yellow]⚠ 主提供商 ({self._primary_provider}) 请求失败（{type(e).__name__}），"
+                f"尝试回退...[/yellow]"
+            )
+
+        # 依次尝试回退提供商
+        for fb_client, fb_model, fb_name in self._fallback_clients:
+            try:
+                console.print(f"[dim]  → 切换到 {fb_name} ({fb_model})[/dim]")
+                return call_fn(fb_client, fb_model, **kwargs)
+            except Exception as e:
+                if not _is_fallback_error(e):
+                    raise
+                console.print(f"[yellow]  → {fb_name} 也失败（{type(e).__name__}），继续...[/yellow]")
+
+        raise RuntimeError("所有可用提供商均请求失败，请检查网络或 API 余额。")
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """执行指定工具，返回 JSON 字符串结果。"""
@@ -53,10 +110,12 @@ class ChatAgent:
         """发送用户消息，返回最终 Assistant 回复（非流式）。"""
         self.history.append({"role": "user", "content": user_message})
 
+        def _create(client: OpenAI, model: str, **kwargs):
+            return client.chat.completions.create(model=model, **kwargs)
+
         while True:
-            # 调用 DeepSeek API
-            response = self.client.chat.completions.create(
-                model=self.model,
+            response = self._call_with_fallback(
+                _create,
                 max_tokens=4096,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
                 tools=TOOL_DEFINITIONS,
@@ -101,11 +160,13 @@ class ChatAgent:
         """
         self.history.append({"role": "user", "content": user_message})
 
+        def _create(client: OpenAI, model: str, **kwargs):
+            return client.chat.completions.create(model=model, **kwargs)
+
         while True:
-            # 检查是否有工具调用待处理（上一轮留下的）
             # 先用非流式做工具调用处理，只在最终回复时流式输出
-            response = self.client.chat.completions.create(
-                model=self.model,
+            response = self._call_with_fallback(
+                _create,
                 max_tokens=4096,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
                 tools=TOOL_DEFINITIONS,
@@ -119,8 +180,8 @@ class ChatAgent:
                 # 最终回复：用流式重新请求以获得逐 token 输出
                 # 先从历史中移除刚刚添加的非流式回复
                 self.history.pop()
-                stream = self.client.chat.completions.create(
-                    model=self.model,
+                stream = self._call_with_fallback(
+                    _create,
                     max_tokens=4096,
                     messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
                     stream=True,
