@@ -19,6 +19,9 @@ ansys-dynamicreporting-core>=0.8.0
 # LLM 客户端（使用 OpenAI 兼容接口，对接 DeepSeek/Qwen/GLM/MiniMax 等）
 openai>=1.30.0
 
+# Token 计数（精确计算 OpenAI 兼容模型的 token 数，用于上下文压缩触发判断）
+tiktoken>=0.7.0
+
 # CLI 框架
 click>=8.1.0
 

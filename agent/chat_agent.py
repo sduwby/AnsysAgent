@@ -43,19 +43,37 @@ def _is_payment_error(exc: Exception) -> bool:
 # 上下文 token 估算
 # ---------------------------------------------------------------------------
 
+try:
+    import tiktoken as _tiktoken
+    _ENC = _tiktoken.get_encoding("cl100k_base")  # gpt-4 / gpt-4o / DeepSeek 等均使用此编码
+except Exception:
+    _ENC = None
+
+
 def _estimate_tokens(messages: list[dict]) -> int:
     """
-    粗略估算消息列表的 token 数量。
-    中英文混合场景按字符数 // 2 估算（偏保守）。
+    精确计算消息列表的 token 数量（使用 tiktoken）。
+    若 tiktoken 不可用则降级为字符数 // 2 的粗略估算。
     """
-    total_chars = 0
+    if _ENC is None:
+        # 降级：字符估算
+        total_chars = 0
+        for msg in messages:
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = json.dumps(content, ensure_ascii=False)
+            total_chars += len(content)
+        return total_chars // 2
+
+    total = 0
     for msg in messages:
         content = msg.get("content") or ""
         if isinstance(content, list):
-            # tool_calls 等结构化内容
             content = json.dumps(content, ensure_ascii=False)
-        total_chars += len(content)
-    return total_chars // 2
+        total += len(_ENC.encode(content))
+        total += 4  # 每条消息固定开销：<|start|>role\n content<|end|>
+    total += 2  # 对话整体开销
+    return total
 
 
 _COMPRESS_THRESHOLD = 80_000   # 超过此 token 数触发压缩
