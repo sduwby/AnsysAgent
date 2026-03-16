@@ -409,6 +409,38 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("未获取到转矩数据", result["error"])
 
+    def test_get_torque_rejects_when_motion_is_explicitly_missing(self):
+        data = DummyReportData({"Moving1.Torque": [1.0]}, sweep_values=[0.0])
+        post = DummyPost(data, reports=["TorqueReport"])
+        app = types.SimpleNamespace(post=post, solution_type="Transient")
+        maxwell_tools._get_model_state(app)["motion_configured"] = False
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_torque()
+        self.assertFalse(result["success"])
+        self.assertIn("未配置旋转运动语义", result["error"])
+
+    def test_get_back_emf_rejects_when_winding_is_explicitly_missing(self):
+        data = DummyReportData({"InducedVoltage(PhaseA)": [1.0]}, sweep_values=[0.0])
+        post = DummyPost(data, reports=["BackEMFReport"])
+        app = types.SimpleNamespace(post=post, solution_type="Transient")
+        maxwell_tools._get_model_state(app)["winding_defined"] = False
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_back_emf()
+        self.assertFalse(result["success"])
+        self.assertIn("未配置绕组语义", result["error"])
+
+    def test_get_back_emf_rejects_mismatched_solver_type(self):
+        data = DummyReportData({"InducedVoltage(PhaseA)": [1.0]}, sweep_values=[0.0])
+        post = DummyPost(data, reports=["BackEMFReport"])
+        app = types.SimpleNamespace(post=post, solution_type="Transient")
+        state = maxwell_tools._get_model_state(app)
+        state["winding_defined"] = True
+        state["setups"] = {"Setup1": {"solver_type": "Magnetostatic"}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_back_emf()
+        self.assertFalse(result["success"])
+        self.assertIn("与当前结果提取不匹配", result["error"])
+
     def test_create_inverter_circuit_fails_if_all_wires_fail(self):
         app = DummyCircuitApp(fail_wires=True)
         with patch("tools.circuit_tools._app", return_value=app):
@@ -533,13 +565,61 @@ class RegressionTests(unittest.TestCase):
         with patch("tools.maxwell_tools._app", return_value=_DummyMaxwellApp()):
             result = maxwell_tools.setup_winding(
                 "PhaseA",
-                ["Conductor_1", "Conductor_2"],
                 10.0,
+                ["Conductor_1", "Conductor_2"],
                 frequency=50.0,
+                turns=12,
+                parallel_branches=2,
+                reverse_polarity=True,
             )
         self.assertTrue(result["success"])
         self.assertEqual(len(calls["coils"]), 2)
         self.assertEqual(calls["winding"]["coil_terminals"], ["Coil_1", "Coil_2"])
+        self.assertEqual(result["result"]["turns"], 12)
+        self.assertEqual(result["result"]["parallel_branches"], 2)
+        self.assertTrue(result["result"]["reverse_polarity"])
+
+    def test_setup_winding_updates_model_state(self):
+        app = types.SimpleNamespace(
+            modeler=DummyMaxwellModeler({"Conductor_1"}),
+            assign_coil=lambda **kwargs: types.SimpleNamespace(name="Coil_1"),
+            assign_winding=lambda **kwargs: None,
+        )
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.setup_winding("PhaseA", 5.0, ["Conductor_1"])
+        self.assertTrue(result["success"])
+        state = maxwell_tools._get_model_state(app)
+        self.assertTrue(state["winding_defined"])
+        self.assertEqual(state["windings"]["PhaseA"]["turns"], 1)
+
+    def test_setup_winding_can_infer_phase_conductors_from_geometry(self):
+        app = types.SimpleNamespace(
+            modeler=DummyMaxwellModeler(
+                {"Conductor_1", "Conductor_4", "Conductor_7", "Conductor_10"}
+            ),
+            assign_coil=lambda **kwargs: types.SimpleNamespace(name=kwargs["input_object"][0].replace("Conductor", "Coil")),
+            assign_winding=lambda **kwargs: None,
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["geometry"] = {"num_slots": 12}
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.setup_winding("PhaseA", 8.0, None)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["result"]["conductor_names"], ["Conductor_1", "Conductor_4", "Conductor_7", "Conductor_10"])
+        self.assertIn("warnings", result["result"])
+
+    def test_setup_winding_inference_fails_without_compatible_geometry(self):
+        app = types.SimpleNamespace(
+            modeler=DummyMaxwellModeler({"Conductor_1"}),
+            assign_coil=lambda **kwargs: types.SimpleNamespace(name="Coil_1"),
+            assign_winding=lambda **kwargs: None,
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["geometry"] = {"num_slots": 10}
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.setup_winding("PhaseA", 5.0, None)
+        self.assertFalse(result["success"])
+        self.assertIn("不足以自动推断", result["error"])
 
     def test_add_solution_setup_uses_explicit_setup_name(self):
         created = {}
@@ -567,6 +647,25 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(created["name"], "MySetup")
         self.assertEqual(result["result"]["setup_name"], "MySetup")
+
+    def test_add_solution_setup_updates_model_state(self):
+        class _DummySetup:
+            def __init__(self):
+                self.props = {}
+
+            def update(self):
+                return None
+
+        app = types.SimpleNamespace(create_setup=lambda name=None: _DummySetup())
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.add_solution_setup(
+                setup_name="Eddy1",
+                solver_type="EddyCurrent",
+                frequency_Hz=400.0,
+            )
+        self.assertTrue(result["success"])
+        state = maxwell_tools._get_model_state(app)
+        self.assertEqual(state["setups"]["Eddy1"]["solver_type"], "EddyCurrent")
 
     def test_get_vibration_results_returns_error_when_script_reports_error(self):
         app = types.SimpleNamespace(run_python_script=lambda script: '{"error":"modal failed"}')
@@ -904,6 +1003,25 @@ class RegressionTests(unittest.TestCase):
             sys.modules.pop("ansys", None)
         self.assertTrue(result["success"])
         self.assertIn("warnings", result["result"])
+
+    def test_run_optimization_requires_variables_and_responses(self):
+        from tools import optislang_tools
+        optislang_tools._osl_config.clear()
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(start=lambda: None)))
+        with patch("tools.optislang_tools._get_osl", return_value=osl):
+            result = optislang_tools.run_optimization()
+        self.assertFalse(result["success"])
+        self.assertIn("尚未配置任何设计变量", result["error"])
+
+    def test_run_sensitivity_study_requires_responses(self):
+        from tools import optislang_tools
+        optislang_tools._osl_config.clear()
+        optislang_tools._osl_config["design_variables"] = {"gap"}
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(start=lambda: None)))
+        with patch("tools.optislang_tools._get_osl", return_value=osl):
+            result = optislang_tools.run_sensitivity_study()
+        self.assertFalse(result["success"])
+        self.assertIn("尚未配置任何响应", result["error"])
 
     def test_get_optimization_results_marks_reference_design_fallback(self):
         class _DummyParam:

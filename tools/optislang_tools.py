@@ -24,6 +24,15 @@ def _get_osl():
     return _osl
 
 
+def _ensure_optislang_prerequisites(*, require_variables: bool = False, require_responses: bool = False) -> None:
+    variables = _osl_config.get("design_variables", set())
+    responses = _osl_config.get("responses", set())
+    if require_variables and not variables:
+        raise RuntimeError("尚未配置任何设计变量，请先调用 add_design_variable。")
+    if require_responses and not responses:
+        raise RuntimeError("尚未配置任何响应/目标，请先调用 add_response。")
+
+
 # ---------------------------------------------------------------------------
 # 工具：connect_optislang - 连接 optiSLang
 # ---------------------------------------------------------------------------
@@ -45,6 +54,7 @@ def connect_optislang(
     try:
         from ansys.optislang.core import Optislang
         _osl = Optislang(host=host, port=port, ini_timeout=timeout)
+        _osl_config.clear()
         return _ok(ok_message(f"已连接到 optiSLang @ {host}:{port}", host=host, port=port, timeout=timeout))
     except Exception as e:
         return _err(str(e))
@@ -132,6 +142,7 @@ def add_design_variable(
                 except Exception as e:
                     warnings.append(f"{attr_name} 写入失败: {e}")
         root_system.parameter_manager.add_parameter(param)
+        _osl_config.setdefault("design_variables", set()).add(name)
         if not initial_applied and initial_value is not None:
             warnings.append("当前 optiSLang 参数对象未暴露可写的初始值属性，initial_value 未生效")
         return _ok(append_warnings(ok_message(
@@ -180,6 +191,7 @@ def add_response(
                 criterion=target,
             )
             cm.add_criterion(criterion)
+            _osl_config.setdefault("responses", set()).add(name)
             return _ok(ok_message(f"目标函数已添加：{target} {name}", name=name, response_type=response_type, target=target))
         elif response_type == "constraint":
             lim = limit if limit is not None else 0.0
@@ -190,6 +202,7 @@ def add_response(
                 limit=lim,
             )
             cm.add_criterion(criterion)
+            _osl_config.setdefault("responses", set()).add(name)
             return _ok(ok_message(f"约束已添加：{name} ≤ {lim}", name=name, response_type=response_type, limit=lim))
         else:
             return _err(f"未知 response_type：{response_type}，请使用 'objective' 或 'constraint'")
@@ -215,6 +228,7 @@ def run_sensitivity_study(
     """
     try:
         osl = _get_osl()
+        _ensure_optislang_prerequisites(require_variables=True, require_responses=True)
         _osl_config["num_designs"] = num_designs
         _osl_config["method"] = method
         # osl.project.start() 会阻塞直到 optiSLang 完成所有计算
@@ -251,6 +265,7 @@ def run_optimization(
     """
     try:
         osl = _get_osl()
+        _ensure_optislang_prerequisites(require_variables=True, require_responses=True)
         _osl_config.update({
             "algorithm": algorithm,
             "max_iterations": max_iterations,
@@ -396,6 +411,7 @@ def disconnect_optislang() -> dict:
         if _osl is not None:
             _osl.dispose()
             _osl = None
+        _osl_config.clear()
         return _ok(ok_message("已断开 optiSLang 连接", disconnected=True))
     except Exception as e:
         return _err(str(e))

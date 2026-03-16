@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 
-from tools.maxwell_tools import _app
+from tools.maxwell_tools import _app, _get_model_state
 from tools.utils import _ok, _err, create_report_and_get_data, ensure_parent_dir, ok_message
 
 
@@ -43,6 +43,27 @@ def _require_series(data, expression: str, error_message: str):
     return values
 
 
+def _require_motor_state(app, *, needs_motion: bool = False, needs_winding: bool = False) -> None:
+    state = _get_model_state(app)
+    if needs_motion and state.get("motion_configured") is False:
+        raise ValueError("当前模型未配置旋转运动语义，无法严谨提取运动相关结果")
+    if needs_winding and state.get("winding_defined") is False:
+        raise ValueError("当前模型未配置绕组语义，无法严谨提取绕组相关结果")
+
+
+def _require_solver_type(app, setup_name: str, allowed_solver_types: set[str]) -> None:
+    state = _get_model_state(app)
+    setup_info = state.get("setups", {}).get(setup_name)
+    if not setup_info:
+        return
+    solver_type = setup_info.get("solver_type")
+    if solver_type and solver_type not in allowed_solver_types:
+        raise ValueError(
+            f"求解设置 '{setup_name}' 的类型为 {solver_type}，"
+            f"与当前结果提取不匹配；期望 {sorted(allowed_solver_types)}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 工具：get_torque - 提取转矩
 # ---------------------------------------------------------------------------
@@ -56,6 +77,8 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
     """
     try:
         app = _app()
+        _require_motor_state(app, needs_motion=True)
+        _require_solver_type(app, setup_name, {"Transient", "Magnetostatic"})
         data = create_report_and_get_data(
             app.post,
             expressions=["Moving1.Torque"],
@@ -87,6 +110,8 @@ def get_back_emf(
     """提取指定相的反电动势波形。"""
     try:
         app = _app()
+        _require_motor_state(app, needs_winding=True)
+        _require_solver_type(app, setup_name, {"Transient"})
         data = create_report_and_get_data(
             app.post,
             expressions=[f"InducedVoltage({phase_name})"],
@@ -147,6 +172,8 @@ def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
     """获取平均铁耗（CoreLoss）和铜耗（OhmicLoss）。"""
     try:
         app = _app()
+        _require_motor_state(app, needs_winding=True)
+        _require_solver_type(app, setup_name, {"Transient", "EddyCurrent", "Magnetostatic"})
         expressions = ["CoreLoss", "OhmicLoss"]
         data = create_report_and_get_data(
             app.post,
@@ -227,6 +254,8 @@ def get_inductance(
     """
     try:
         app = _app()
+        _require_motor_state(app, needs_winding=True)
+        _require_solver_type(app, setup_name, {"Magnetostatic", "Transient"})
         if phases is None:
             phases = ["PhaseA", "PhaseB", "PhaseC"]
 
@@ -288,6 +317,8 @@ def get_flux_linkage(
     try:
         import math
         app = _app()
+        _require_motor_state(app, needs_winding=True)
+        _require_solver_type(app, setup_name, {"Transient", "Magnetostatic"})
         if phases is None:
             phases = ["PhaseA", "PhaseB", "PhaseC"]
 
@@ -356,6 +387,8 @@ def get_cogging_torque(
     """
     try:
         app = _app()
+        _require_motor_state(app, needs_motion=True)
+        _require_solver_type(app, setup_name, {"Magnetostatic", "Transient"})
         data = create_report_and_get_data(
             app.post,
             expressions=["Moving1.Torque"],

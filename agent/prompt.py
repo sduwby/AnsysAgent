@@ -23,7 +23,7 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 2. **create_maxwell_project(project_name, design_name="Motor")** - 创建 Maxwell 项目和设计
 3. **create_motor_geometry(stator_outer_radius, stator_inner_radius, rotor_outer_radius, rotor_inner_radius, num_slots, num_poles, magnet_thickness, stack_length=50.0)** - 建立简化 PMSM 几何（定子/转子/永磁体/气隙），所有尺寸单位 mm；会显式提示该几何尚未自动建立运动带和永磁体磁化方向
 4. **assign_material(object_name, material_name)** - 赋予材料（material_name 须存在于 AEDT 材料库，如 "M250-35A"、"NdFe35"）
-5. **setup_winding(phase_name, conductor_names, current_amplitude, frequency=0, phase_angle=0.0)** - 配置绕组激励；会逐个校验并绑定导体对象，frequency=0 为磁静态，current_amplitude 为峰值电流（A）
+5. **setup_winding(phase_name, current_amplitude, conductor_names=None, frequency=0, phase_angle=0.0, turns=1, parallel_branches=1, reverse_polarity=False)** - 配置绕组激励；可显式指定导体列表，也可在标准三相等间隔槽位下自动推断；支持匝数、并联支路和极性
 6. **add_solution_setup(setup_name="Setup1", solver_type="Transient", stop_time=0.02, time_step=0.0001, num_passes=10, frequency_Hz=50.0)** - 添加求解设置；solver_type: Transient/Magnetostatic/EddyCurrent；stop_time/time_step 单位秒（瞬态专用），frequency_Hz 用于 EddyCurrent
 7. **run_simulation(setup_name="Setup1")** - 运行仿真
 8. **get_torque(setup_name="Setup1", sweep_name="LastAdaptive")** - 提取平均转矩（Nm）及时域波形；返回 avg_torque_Nm 和 waveform

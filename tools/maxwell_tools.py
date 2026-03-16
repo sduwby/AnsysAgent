@@ -36,6 +36,44 @@ def _get_setup_names(app) -> list[str]:
     return []
 
 
+def _get_model_state(app) -> dict:
+    state = getattr(app, "_ansysagent_model_state", None)
+    if not isinstance(state, dict):
+        state = {}
+        setattr(app, "_ansysagent_model_state", state)
+    return state
+
+
+def _infer_phase_conductors(app, phase_name: str) -> list[str]:
+    state = _get_model_state(app)
+    geometry = state.get("geometry", {})
+    num_slots = geometry.get("num_slots")
+    if not num_slots or num_slots % 3 != 0:
+        return []
+
+    phase_index_map = {
+        "PHASEA": 0,
+        "A": 0,
+        "PHASEB": 1,
+        "B": 1,
+        "PHASEC": 2,
+        "C": 2,
+    }
+    phase_index = phase_index_map.get(phase_name.upper())
+    if phase_index is None:
+        return []
+
+    conductors = []
+    modeler = getattr(app, "modeler", None)
+    get_object = getattr(modeler, "get_object_from_name", None)
+    for slot_idx in range(phase_index + 1, num_slots + 1, 3):
+        conductor_name = f"Conductor_{slot_idx}"
+        if callable(get_object) and get_object(conductor_name) is None:
+            return []
+        conductors.append(conductor_name)
+    return conductors
+
+
 def _apply_magnetization(app, magnet_name: str, angle_deg: float) -> bool:
     angle_value = f"{angle_deg}deg"
     candidates = [
@@ -389,6 +427,18 @@ def create_motor_geometry(
         magnetization_configured = not any("磁化方向" in warning for warning in warnings)
         if not magnetization_configured:
             warnings.append("请在 AEDT 中复核永磁体极性交替磁化方向后再做精确 PMSM 仿真")
+        state = _get_model_state(app)
+        state.update({
+            "geometry_defined": True,
+            "geometry": {
+                "num_slots": num_slots,
+                "num_poles": num_poles,
+                "stack_length_mm": stack_length,
+            },
+            "motion_configured": motion_configured,
+            "magnetization_configured": magnetization_configured,
+            "torque_ready": bool(magnetization_configured and motion_configured),
+        })
 
         return _ok(append_warnings(ok_message(
             f"电机几何已建立：{num_slots} 槽，{num_poles} 极，"
@@ -400,8 +450,9 @@ def create_motor_geometry(
             stack_length_mm=stack_length,
             magnetization_configured=magnetization_configured,
             motion_configured=motion_configured,
-            torque_ready=bool(magnetization_configured and motion_configured),
+            torque_ready=state["torque_ready"],
         ), warnings))
+        
     except Exception as e:
         return _err(str(e))
 
@@ -431,25 +482,42 @@ def assign_material(object_name: str, material_name: str) -> dict:
 
 def setup_winding(
     phase_name: str,
-    conductor_names: list[str],
     current_amplitude: float,
+    conductor_names: list[str] | None = None,
     frequency: float = 0,
     phase_angle: float = 0.0,
+    turns: int = 1,
+    parallel_branches: int = 1,
+    reverse_polarity: bool = False,
 ) -> dict:
     """
     配置绕组相激励。
 
     Args:
         phase_name: 相名称，如 "PhaseA"
-        conductor_names: 槽内导体对象名称列表
+        conductor_names: 槽内导体对象名称列表；为空时会尝试按三相等间隔槽号自动推断
         current_amplitude: 峰值电流（A）
         frequency: 电频率（Hz），磁静态仿真置 0
         phase_angle: 相位角（度）
+        turns: 匝数，默认 1
+        parallel_branches: 并联支路数，默认 1
+        reverse_polarity: 是否反向极性，默认 False
     """
     try:
         app = _app()
+        warnings: list[str] = []
         if not conductor_names:
-            return _err("conductor_names 不能为空")
+            conductor_names = _infer_phase_conductors(app, phase_name)
+            if conductor_names:
+                warnings.append(
+                    f"未显式提供 conductor_names，已按三相等间隔槽号为 {phase_name} 自动推断导体列表"
+                )
+            else:
+                return _err("conductor_names 不能为空，且当前几何不足以自动推断相绕组导体列表")
+        if turns <= 0:
+            return _err("turns 必须为正整数")
+        if parallel_branches <= 0:
+            return _err("parallel_branches 必须为正整数")
 
         modeler = app.modeler
         get_object = getattr(modeler, "get_object_from_name", None)
@@ -485,21 +553,46 @@ def setup_winding(
             )
         else:
             current_expr = f"{current_amplitude}A"
-        app.assign_winding(
-            coil_terminals=coil_terminals,
-            winding_name=phase_name,
-            winding_type="Current",
-            current_value=current_expr,
-            phase_angle=f"{phase_angle}deg",
-        )
-        return _ok(ok_message(
+        winding_kwargs = {
+            "coil_terminals": coil_terminals,
+            "winding_name": phase_name,
+            "winding_type": "Current",
+            "current_value": current_expr,
+            "phase_angle": f"{phase_angle}deg",
+        }
+        optional_winding_fields = {
+            "number_of_turns": turns,
+            "parallel_branches": parallel_branches,
+            "polarity": "Negative" if reverse_polarity else "Positive",
+        }
+        for field_name, value in optional_winding_fields.items():
+            winding_kwargs[field_name] = value
+        try:
+            app.assign_winding(**winding_kwargs)
+        except TypeError:
+            for field_name in list(optional_winding_fields):
+                winding_kwargs.pop(field_name, None)
+            app.assign_winding(**winding_kwargs)
+
+        state = _get_model_state(app)
+        state.setdefault("windings", {})[phase_name] = {
+            "conductors": list(conductor_names),
+            "turns": turns,
+            "parallel_branches": parallel_branches,
+            "reverse_polarity": reverse_polarity,
+        }
+        state["winding_defined"] = True
+        return _ok(append_warnings(ok_message(
             f"绕组 '{phase_name}' 已配置：{current_amplitude}A @ {phase_angle}°",
             phase_name=phase_name,
             conductor_names=conductor_names,
             current_amplitude=current_amplitude,
             frequency=frequency,
             phase_angle=phase_angle,
-        ))
+            turns=turns,
+            parallel_branches=parallel_branches,
+            reverse_polarity=reverse_polarity,
+        ), warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -556,6 +649,16 @@ def add_solution_setup(
             setup.update()
         else:
             return _err(f"未知求解器类型：{solver_type}")
+        state = _get_model_state(app)
+        state.setdefault("setups", {})[setup_name] = {
+            "solver_type": solver_type,
+            "stop_time": stop_time if solver_type == "Transient" else None,
+            "time_step": time_step if solver_type == "Transient" else None,
+            "num_passes": num_passes,
+            "frequency_Hz": frequency_Hz if solver_type == "EddyCurrent" else None,
+        }
+        state["last_setup_name"] = setup_name
+        state["last_solver_type"] = solver_type
         return _ok(ok_message(
             f"求解设置已添加：{setup_name}（{solver_type}）",
             setup_name=setup_name,
