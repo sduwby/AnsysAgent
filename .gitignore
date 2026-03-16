@@ -30,3 +30,4 @@ env/
 *.csv
 *.png
 *.jpg
+.rag/

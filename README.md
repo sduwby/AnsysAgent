@@ -16,6 +16,7 @@
 - **多轮对话**：完整上下文保持，支持追加修改
 - **流式输出**：实时显示回复内容，工具调用实时可见
 - **模块化工具**：92 个工具覆盖电机仿真全流程，支持全自动化运行
+- **本地知识增强（RAG）**：自动索引 `docs/api`、`knowledge/official`、`knowledge/internal` 目录，支持 PDF / PPTX / Notebook / Python / Markdown 等格式，回答问题时优先检索本地文档片段作为参考
 
 ## 完整仿真流水线
 
@@ -153,6 +154,28 @@ You: 对气隙宽度做多目标优化，生成完整分析报告
   ✓ 最优气隙 0.9mm，转矩提升 8.3%；报告已保存至 motor_report.html
 ```
 
+## 本地知识库（RAG）
+
+Agent 启动时会自动扫描以下目录，构建关键词索引（存储于 `.rag/keyword_index.json`）：
+
+| 目录 | 用途 | 来源类型标签 |
+|------|------|------------|
+| `docs/api/` | Ansys Python 库 API 速查表 PDF | `api` |
+| `knowledge/official/` | Ansys 官方教程、课件、手册 | `official` |
+| `knowledge/internal/` | 内部经验文档、自定义知识 | `internal` |
+
+**支持的文件格式**：`.pdf`、`.pptx`、`.ipynb`、`.py`、`.md`、`.txt`、`.rst`
+
+**首次使用 / 更新文档后**，删除旧 index 并重启 agent 触发重建：
+
+```bash
+rm .rag/keyword_index.json   # macOS / Linux
+del .rag\keyword_index.json  # Windows
+ansys-agent                  # 重启后自动重建
+```
+
+> `.rag/` 目录已加入 `.gitignore`，不会提交至版本库。
+
 ## 打包（可执行文件）
 
 ```bat
@@ -192,6 +215,15 @@ AnsysAgent/
 │   ├── dynamic_reporting_tools.py # 自动化报告生成（ADR/HTML 双轨）
 │   └── utils.py                   # 共享辅助函数（_ok / _err）
 ├── docs/api/                      # Ansys Python 库 API 速查表 PDF
+├── knowledge/
+│   ├── official/                  # Ansys 官方教程、课件、手册（PDF / PPTX / ipynb）
+│   └── internal/                  # 内部经验文档、自定义知识（MD / TXT / PY）
+├── rag/
+│   ├── config.py                  # RAG 路径配置
+│   ├── ingest.py                  # 文档解析与 chunk 切分
+│   ├── retriever.py               # 关键词检索（BM25-like）
+│   └── service.py                 # index 构建 / 加载 / 检索服务（含内存缓存）
+├── .rag/                          # 运行时生成的 index 文件（已 .gitignore）
 ├── requirements.txt               # Python 依赖列表
 ├── build.bat                      # Windows 打包脚本
 └── ansys-agent.spec               # PyInstaller 配置
@@ -206,3 +238,4 @@ AnsysAgent/
 - `dynamic_reporting_tools` 在无 ADR 许可证时自动回退到内置 HTML 模板渲染，无需额外依赖
 - Claude (Anthropic) 因 API 格式不兼容 OpenAI 客户端已移除，如需使用请自行实现 Anthropic 适配层
 - 首次运行仿真前需确保对应 Ansys 软件已启动并处于就绪状态
+- RAG 知识索引（`.rag/`）为运行时自动生成文件，不提交至版本库；向 `knowledge/` 添加新文档后需删除旧 index 并重启 agent 触发重建
