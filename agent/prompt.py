@@ -19,12 +19,12 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 
 ## Maxwell 电磁仿真工具
 
-1. **connect_aedt(version="2024.1", is_3d=False, non_graphical=False)** - 连接/启动 AEDT；is_3d=True 用 Maxwell 3D，False 用 2D
+1. **connect_aedt(version="2024.1", is_3d=False, non_graphical=False, project_path="", design_name="")** - 连接/启动 AEDT；is_3d=True 用 Maxwell 3D，False 用 2D；可选指定已有项目和设计
 2. **create_maxwell_project(project_name, design_name="Motor")** - 创建 Maxwell 项目和设计
-3. **create_motor_geometry(stator_outer_radius, stator_inner_radius, rotor_outer_radius, rotor_inner_radius, num_slots, num_poles, magnet_thickness, stack_length=50.0)** - 建立 PMSM 几何（定子/转子/永磁体/气隙），所有尺寸单位 mm
+3. **create_motor_geometry(stator_outer_radius, stator_inner_radius, rotor_outer_radius, rotor_inner_radius, num_slots, num_poles, magnet_thickness, stack_length=50.0)** - 建立简化 PMSM 几何（定子/转子/永磁体/气隙），所有尺寸单位 mm；会显式提示该几何尚未自动建立运动带和永磁体磁化方向
 4. **assign_material(object_name, material_name)** - 赋予材料（material_name 须存在于 AEDT 材料库，如 "M250-35A"、"NdFe35"）
-5. **setup_winding(phase_name, conductor_names, current_amplitude, frequency=0, phase_angle=0.0)** - 配置绕组激励；frequency=0 为磁静态，current_amplitude 为峰值电流（A）
-6. **add_solution_setup(solver_type="Transient", stop_time=0.02, time_step=0.0001, num_passes=10)** - 添加求解设置；solver_type: Transient/Magnetostatic/EddyCurrent；stop_time/time_step 单位秒（瞬态专用）
+5. **setup_winding(phase_name, conductor_names, current_amplitude, frequency=0, phase_angle=0.0)** - 配置绕组激励；会逐个校验并绑定导体对象，frequency=0 为磁静态，current_amplitude 为峰值电流（A）
+6. **add_solution_setup(setup_name="Setup1", solver_type="Transient", stop_time=0.02, time_step=0.0001, num_passes=10, frequency_Hz=50.0)** - 添加求解设置；solver_type: Transient/Magnetostatic/EddyCurrent；stop_time/time_step 单位秒（瞬态专用），frequency_Hz 用于 EddyCurrent
 7. **run_simulation(setup_name="Setup1")** - 运行仿真
 8. **get_torque(setup_name="Setup1", sweep_name="LastAdaptive")** - 提取平均转矩（Nm）及时域波形；返回 avg_torque_Nm 和 waveform
 9. **get_back_emf(phase_name="PhaseA", setup_name="Setup1", sweep_name="LastAdaptive")** - 提取指定相反电动势；返回 peak_emf_V 和波形
@@ -50,10 +50,10 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 ## Mechanical 结构振动工具 (NVH)
 
 22. **connect_mechanical(version="2024.1")** - 连接 Ansys Mechanical
-23. **import_maxwell_forces(maxwell_project_path, setup_name="Setup1")** - 将 Maxwell 电磁力（Maxwell Stress Tensor）导入 Mechanical；maxwell_project_path 为 .aedt 文件路径
-24. **run_modal_analysis(num_modes=12, freq_range_hz=(0, 10000))** - 提取固有频率和振型
-25. **run_harmonic_analysis(freq_range_hz=(0, 5000), num_steps=100, damping_ratio=0.02)** - 谐响应分析（NVH）
-26. **get_vibration_results()** - 获取固有频率列表（Hz）和最大变形量
+23. **import_maxwell_forces(maxwell_project_path, design_name="", setup_name="Setup1")** - 将 Maxwell 电磁力（Maxwell Stress Tensor）导入 Mechanical；`design_name` 为 Maxwell 设计名，`setup_name` 为求解设置名
+24. **run_modal_analysis(num_modes=12, freq_range_hz=(0, 10000), analysis_name="Modal")** - 提取固有频率和振型
+25. **run_harmonic_analysis(freq_range_hz=(0, 5000), num_steps=100, damping_ratio=0.02, analysis_name="Harmonic Response")** - 谐响应分析（NVH）
+26. **get_vibration_results(analysis_name="")** - 获取固有频率列表（Hz）和最大变形量；analysis_name 留空则使用第一个分析
 
 ## 参数化扫描工具
 
@@ -84,8 +84,8 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 
 43. **connect_fluent(version="23.2", precision="double", processors=4, mode="solver")** - 启动 Fluent 会话；precision: double/single；mode: solver/meshing
 44. **read_fluent_mesh(mesh_file_path)** - 读取网格/Case 文件（.msh/.msh.gz/.cas/.cas.gz）
-45. **setup_fluid_models(viscous_model="k-epsilon", k_epsilon_variant="realizable", energy_on=False, turbulence_intensity=0.05)** - 配置湍流模型（laminar/k-epsilon/k-omega/sst/realizable-ke/rng-ke）和能量方程
-46. **define_boundary_conditions(boundary_name, bc_type, velocity_magnitude=None, pressure_value=None, temperature=None, turbulence_intensity=0.05, hydraulic_diameter=None)** - 设定边界条件；bc_type: velocity-inlet/pressure-inlet/pressure-outlet/wall/symmetry；速度单位 m/s，压力单位 Pa，温度单位 K
+45. **setup_fluid_models(viscous_model="k-epsilon", k_epsilon_variant="realizable", energy_on=False, turbulence_intensity=0.05, turbulent_length_scale=None)** - 配置湍流模型（laminar/k-epsilon/k-omega/sst/realizable-ke/rng-ke）和能量方程
+46. **define_boundary_conditions(boundary_name, bc_type, velocity_magnitude=None, pressure_value=None, temperature=None, turbulence_intensity=0.05, hydraulic_diameter=None)** - 设定边界条件；bc_type: velocity-inlet/pressure-inlet/pressure-outlet/wall；速度单位 m/s，压力单位 Pa，温度单位 K
 47. **setup_fluent_solver(scheme="coupled", convergence_absolute=1e-4, max_iterations=500)** - 配置求解器；scheme: coupled（推荐）/simple；SIMPLE 算法额外有亚松弛因子参数
 48. **initialize_fluent(method="hybrid", reference_velocity=None, reference_pressure=None)** - 初始化流场；method: hybrid（推荐）/standard
 49. **run_fluent_simulation(iterations=300, report_interval=10)** - 执行稳态迭代计算
@@ -116,12 +116,12 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 ## 电磁-热耦合工具（P1 完整自动化）
 
 64. **link_maxwell_to_icepak(maxwell_design_name="", setup_name="Setup1", use_spatial_distribution=True)** - 将 Maxwell 仿真损耗自动映射到 Icepak，替代手动填写铜耗/铁耗；use_spatial_distribution=True 为高精度空间分布映射（3D），False 为均匀平均值（2D 快速）
-65. **run_em_thermal_iteration(max_iterations=3, convergence_temp_delta=1.0, maxwell_setup_name="Setup1", icepak_setup_name="SetupThermal")** - 运行电磁-热耦合迭代：Maxwell→损耗映射→Icepak→温度反馈→重复，收敛判据为相邻轮次最高温度差 < convergence_temp_delta（°C）；返回迭代历史和收敛状态
+65. **run_em_thermal_iteration(max_iterations=3, convergence_temp_delta=1.0, maxwell_setup_name="Setup1", icepak_setup_name="SetupThermal", feedback_mode="one_way")** - 运行电磁-热耦合迭代：Maxwell→损耗映射→Icepak→温度反馈/单向热迭代→重复；feedback_mode="one_way" 为默认单向模式，"two_way" 要求 Maxwell 已建立温度反馈变量；收敛判据为相邻轮次最高温度差 < convergence_temp_delta（°C）
 
 ## 高级结果解析工具（P2）
 
-66. **get_inductance(setup_name="Setup1", sweep_name="LastAdaptive", phases=None)** - 提取 PMSM 相自感及 Ld/Lq 近似值；phases 默认 ["PhaseA","PhaseB","PhaseC"]；精确 Ld/Lq 需配合多角度磁静态参数扫描
-67. **get_flux_linkage(setup_name="Setup1", sweep_name="LastAdaptive", phases=None)** - 提取三相磁链波形（ψA/ψB/ψC）及 dq 磁链分量（ψd、ψq）；矢量控制设计的核心输入
+66. **get_inductance(setup_name="Setup1", sweep_name="LastAdaptive", phases=None)** - 提取 PMSM 相自感及 Ld/Lq 近似值；phases 默认 ["PhaseA","PhaseB","PhaseC"]；返回会显式标注 dq 电感为近似估算
+67. **get_flux_linkage(setup_name="Setup1", sweep_name="LastAdaptive", phases=None)** - 提取三相磁链波形（ψA/ψB/ψC）及 dq 磁链分量（ψd、ψq）；dq 默认仅为首时刻快照参考值
 68. **get_cogging_torque(setup_name="Setup1", sweep_name="LastAdaptive")** - 提取齿槽转矩波形和峰峰值；需先在零电流激励下对转子位置进行参数化磁静态扫描
 69. **get_efficiency_map(speed_param="Speed", current_param="Current", setup_name="Setup1", sweep_name="", rated_voltage=400.0)** - 从转速×电流二维参数扫描结果聚合效率 MAP，返回各工况 η(%)、Pout、Ploss 及最高效率工作点
 70. **check_demagnetization(setup_name="Setup1", sweep_name="LastAdaptive", magnet_objects=None, operating_temperature_C=120.0, safety_margin=0.1)** - 校核永磁体退磁风险；自动搜索含 'Magnet'/'PM' 的对象；计算温度修正后的矫顽力 Hcb 和安全裕量；裕量 < safety_margin 则标记为危险
@@ -129,7 +129,7 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 ## RMXprt 快速初设计工具（P3）
 
 71. **connect_rmxprt(version="2024.1", non_graphical=False)** - 连接 RMXprt 解析法电机设计模块；建立"快速预估 → Maxwell 精确仿真"两步流程的入口
-72. **create_motor_from_template(motor_type="PMSM", stator_outer_diameter, stator_inner_diameter, rotor_outer_diameter, shaft_diameter, stack_length, num_poles, num_slots, rated_speed, rated_voltage, rated_power, design_name="RMXprt_Motor")** - 使用模板建立电机初始设计；motor_type: PMSM/BLDC/IM/SRM/SYN/SYNRM；尺寸单位 mm，转速 rpm，电压 V，功率 W
+72. **create_motor_from_template(motor_type="PMSM", stator_outer_diameter, stator_inner_diameter, rotor_outer_diameter, shaft_diameter, stack_length, num_poles, num_slots, rated_speed, rated_voltage, rated_power, design_name="RMXprt_Motor")** - 使用模板建立电机初始设计；若关键参数未成功写入则直接报错，不再默默退回默认模板参数
 73. **run_rmxprt_analysis(setup_name="Setup1")** - 运行解析法仿真；返回效率、转矩、Ld/Lq 电感、磁链等预估值，秒级完成
 74. **export_to_maxwell(setup_name="Setup1", is_2d=True, maxwell_design_name="")** - 将 RMXprt 设计导出为 Maxwell 2D/3D 精确 FEM 模型（自动建立几何和激励）；导出后切换至 Maxwell 工具继续精化仿真
 

@@ -5,8 +5,9 @@ Motor-CAD 工具：通过 PyMotorCAD 驱动 Ansys Motor-CAD 进行电机解析�
 """
 
 from __future__ import annotations
+import os
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings
 
 _mcad_app = None  # 全局 Motor-CAD 实例
 
@@ -33,9 +34,17 @@ def connect_motorcad(port: int = 0) -> dict:
     try:
         import ansys.motorcad.core as mcad
         _mcad_app = mcad.MotorCAD(port=port if port else None, reuse_parallel_instances=False)
-        _mcad_app.set_variable("MessageDisplayState", 2)  # 静默模式，减少弹窗
+        warnings: list[str] = []
+        try:
+            _mcad_app.set_variable("MessageDisplayState", 2)  # 静默模式，减少弹窗
+        except Exception as e:
+            warnings.append(f"静默模式设置失败: {e}")
         version = _mcad_app.get_variable("SoftwareVersion")
-        return _ok(f"已连接到 Motor-CAD（版本：{version}，端口：{port or '自动'}）")
+        return _ok(append_warnings({
+            "version": version,
+            "port": port or "自动",
+            "message": f"已连接到 Motor-CAD（版本：{version}，端口：{port or '自动'}）",
+        }, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -68,6 +77,20 @@ def set_motorcad_geometry(
         motor_type: 电机类型，"PMSM" / "BLDC" / "IM"，影响结构模板选择
     """
     try:
+        warnings: list[str] = []
+        if stator_inner_diam >= stator_outer_diam:
+            return _err("定子内径必须小于定子外径")
+        if rotor_outer_diam >= stator_inner_diam:
+            return _err("转子外径必须小于定子内径")
+        if shaft_diam >= rotor_outer_diam:
+            return _err("轴径必须小于转子外径")
+        if stack_length <= 0:
+            return _err("叠长必须为正值")
+        if num_poles <= 0 or num_poles % 2 != 0:
+            return _err("极数必须为正偶数")
+        if num_slots <= 0:
+            return _err("槽数必须为正整数")
+
         app = _app()
         # 基本几何参数
         app.set_variable("Stator_Lam_Dia", stator_outer_diam)
@@ -87,10 +110,10 @@ def set_motorcad_geometry(
         topology = _type_map.get(motor_type.upper(), "SurfaceInset")
         try:
             app.set_variable("MachineType", topology)
-        except Exception:
-            pass  # 部分版本字段名不同，忽略
+        except Exception as e:
+            warnings.append(f"MachineType 写入失败: {e}")
 
-        return _ok({
+        return _ok(append_warnings({
             "motor_type": motor_type,
             "stator_outer_diam_mm": stator_outer_diam,
             "stator_inner_diam_mm": stator_inner_diam,
@@ -98,7 +121,7 @@ def set_motorcad_geometry(
             "stack_length_mm": stack_length,
             "num_poles": num_poles,
             "num_slots": num_slots,
-        })
+        }, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -125,6 +148,7 @@ def run_motorcad_em_analysis(
         app.set_variable("RotationSpeed", rated_speed_rpm)
         app.set_variable("PhaseCurrentAmplitude", rated_current_A)
         app.set_variable("CurrentAngle", current_angle_deg)
+        warnings: list[str] = []
 
         # 运行电磁仿真（Motor-CAD Lab 或 Emag 模块）
         app.do_emag_calculation()
@@ -145,10 +169,11 @@ def run_motorcad_em_analysis(
             try:
                 val = app.get_variable(mcad_var)
                 results[result_key] = round(float(val), 4) if val is not None else None
-            except Exception:
+            except Exception as e:
                 results[result_key] = None
+                warnings.append(f"{mcad_var} 读取失败: {e}")
 
-        return _ok(results)
+        return _ok(append_warnings(results, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -173,6 +198,7 @@ def run_motorcad_thermal_analysis(
     try:
         app = _app()
         app.set_variable("Ambient_Temperature", ambient_temp_C)
+        warnings: list[str] = []
 
         # 冷却配置
         cooling_map = {"TEFC": 0, "WJ": 1, "OilSpray": 2, "WaterJacket": 1}
@@ -181,8 +207,8 @@ def run_motorcad_thermal_analysis(
             app.set_variable("Cooling_Type", cooling_code)
             if coolant_flow_rate > 0:
                 app.set_variable("WJ_Fluid_FlowRate", coolant_flow_rate)
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"冷却参数写入失败: {e}")
 
         app.do_steady_state_calculation()
 
@@ -203,7 +229,7 @@ def run_motorcad_thermal_analysis(
             except Exception:
                 results[result_key] = None
 
-        return _ok(results)
+        return _ok(append_warnings(results, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -226,13 +252,22 @@ def run_motorcad_nvh_analysis(
     try:
         app = _app()
         app.set_variable("RotationSpeed", speed_rpm)
+        warnings: list[str] = []
 
         try:
             app.set_variable("NVH_FreqMax", freq_max_Hz)
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"NVH_FreqMax 写入失败: {e}")
 
-        app.do_emag_calculation()  # NVH 依赖电磁力波数据，需先运行电磁
+        nvh_invoked = False
+        for method_name in ("do_nvh_calculation", "calculate_nvh", "run_nvh_calculation"):
+            method = getattr(app, method_name, None)
+            if callable(method):
+                method()
+                nvh_invoked = True
+                break
+        if not nvh_invoked:
+            return _err("当前 Motor-CAD API 未暴露可用的 NVH 求解方法，已拒绝伪装成分析完成")
 
         results = {"speed_rpm": speed_rpm, "freq_max_Hz": freq_max_Hz}
         nvh_vars = [
@@ -254,7 +289,7 @@ def run_motorcad_nvh_analysis(
         except Exception:
             results["dominant_force_order"] = None
 
-        return _ok(results)
+        return _ok(append_warnings(results, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -280,14 +315,15 @@ def get_motorcad_performance_map(
     """
     try:
         app = _app()
+        warnings: list[str] = []
         # 配置 Lab 扫描范围
         try:
             app.set_variable("MaxSpeed", max_speed_rpm)
             app.set_variable("MaxTorque", max_torque_Nm)
             app.set_variable("SpeedPointCount", speed_points)
             app.set_variable("TorquePointCount", torque_points)
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"效率 MAP 扫描参数写入失败: {e}")
 
         app.calculate_operating_point_graph()  # Lab 效率 MAP 计算
 
@@ -305,15 +341,17 @@ def get_motorcad_performance_map(
                             "torque_Nm": round(float(torque), 2),
                             "efficiency_pct": round(float(eff), 2),
                         })
-        except Exception:
-            pass  # 若 API 不支持数组提取直接返回空列表
+        except Exception as e:
+            return _err(f"提取 Motor-CAD 效率 MAP 数组失败: {e}")
 
         best = max(eff_map, key=lambda x: x["efficiency_pct"]) if eff_map else None
-        return _ok({
+        if not eff_map:
+            return _err("未能从 Motor-CAD 提取效率 MAP 数据，请确认当前版本支持数组结果读取")
+        return _ok(append_warnings({
             "num_points": len(eff_map),
             "peak_efficiency": best,
             "efficiency_map": eff_map,
-        })
+        }, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -336,23 +374,36 @@ def export_motorcad_to_maxwell(
     try:
         app = _app()
         dim = "2D" if is_2d else "3D"
+        warnings: list[str] = []
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        export_invoked = False
         try:
-            if is_2d:
-                app.create_model(f"Maxwell2D{dim}")
-            else:
-                app.create_model(f"Maxwell3D{dim}")
+            if output_dir:
+                try:
+                    app.set_variable("ExportPath", output_dir)
+                except Exception as e:
+                    warnings.append(f"导出目录未写入 Motor-CAD: {e}")
+            model_name = "Maxwell2D" if is_2d else "Maxwell3D"
+            app.create_model(model_name)
+            export_invoked = True
         except AttributeError:
             # 旧版 API
             app.do_maxwell_setup()
+            export_invoked = True
 
-        return _ok({
+        if not export_invoked:
+            return _err("未能触发 Motor-CAD 到 Maxwell 的导出")
+
+        return _ok(append_warnings({
             "dimension": dim,
             "output_dir": output_dir or "Motor-CAD 默认目录",
             "message": (
                 f"Motor-CAD 设计已导出为 Maxwell {dim} 模型。"
                 "请在 AEDT 中打开导出项目，使用 Maxwell 工具继续精确仿真。"
             ),
-        })
+        }, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -368,6 +419,9 @@ def disconnect_motorcad() -> dict:
         if _mcad_app is not None:
             _mcad_app.quit()
             _mcad_app = None
-        return _ok("Motor-CAD 连接已断开")
+        return _ok({
+            "message": "Motor-CAD 连接已断开",
+            "disconnected": True,
+        })
     except Exception as e:
         return _err(str(e))

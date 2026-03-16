@@ -10,7 +10,7 @@ import json
 import os
 from typing import Any
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, ensure_parent_dir, ok_message
 
 _fluent_session = None  # 全局 Fluent 会话实例
 
@@ -51,7 +51,13 @@ def connect_fluent(
             mode=mode,
             ui_mode="no_gui",  # 服务器模式，无 GUI
         )
-        return _ok(f"已启动 Fluent {version}（{precision} 精度，{processors} 进程）")
+        return _ok(ok_message(
+            f"已启动 Fluent {version}（{precision} 精度，{processors} 进程）",
+            version=version,
+            precision=precision,
+            processors=processors,
+            mode=mode,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -73,10 +79,10 @@ def read_fluent_mesh(mesh_file_path: str) -> dict:
 
         if ext in (".cas",):
             session.file.read_case(file_name=mesh_file_path)
-            return _ok(f"已读取 Case 文件: {mesh_file_path}")
+            return _ok(ok_message(f"已读取 Case 文件: {mesh_file_path}", mesh_file_path=mesh_file_path, file_type="case"))
         else:
             session.file.read_mesh(file_name=mesh_file_path)
-            return _ok(f"已读取网格文件: {mesh_file_path}")
+            return _ok(ok_message(f"已读取网格文件: {mesh_file_path}", mesh_file_path=mesh_file_path, file_type="mesh"))
     except Exception as e:
         return _err(str(e))
 
@@ -131,11 +137,14 @@ def setup_fluid_models(
         if energy_on:
             setup.models.energy.enabled = True
 
-        return _ok(
+        return _ok(ok_message(
             f"物理模型已配置：湍流={viscous_model}，"
             f"能量方程={'开启' if energy_on else '关闭'}，"
-            f"湍流强度={turbulence_intensity * 100:.1f}%"
-        )
+            f"湍流强度={turbulence_intensity * 100:.1f}%",
+            viscous_model=viscous_model,
+            energy_on=energy_on,
+            turbulence_intensity=turbulence_intensity,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -169,8 +178,17 @@ def define_boundary_conditions(
     try:
         session = _session()
         bcs = session.setup.boundary_conditions
+        supported_bc_types = {"velocity-inlet", "pressure-inlet", "pressure-outlet", "wall"}
+
+        if bc_type not in supported_bc_types:
+            return _err(
+                f"当前工具仅支持 {sorted(supported_bc_types)}，"
+                f"不支持 '{bc_type}' 的自动配置"
+            )
 
         if bc_type == "velocity-inlet":
+            if velocity_magnitude is None:
+                return _err("velocity-inlet 必须提供 velocity_magnitude")
             bc = bcs.velocity_inlet[boundary_name]
             if velocity_magnitude is not None:
                 bc.momentum.velocity.value = velocity_magnitude
@@ -204,7 +222,7 @@ def define_boundary_conditions(
         if temperature is not None:
             info_parts.append(f"温度={temperature} K")
 
-        return _ok("，".join(info_parts))
+        return _ok(ok_message("，".join(info_parts), boundary_name=boundary_name, bc_type=bc_type))
     except Exception as e:
         return _err(str(e))
 
@@ -251,10 +269,13 @@ def setup_fluent_solver(
             except Exception:
                 pass
 
-        return _ok(
+        return _ok(ok_message(
             f"求解器已配置：算法={scheme}，收敛标准={convergence_absolute}，"
-            f"最大迭代={max_iterations}"
-        )
+            f"最大迭代={max_iterations}",
+            scheme=scheme,
+            convergence_absolute=convergence_absolute,
+            max_iterations=max_iterations,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -289,7 +310,7 @@ def initialize_fluent(
                 initialization.initial_values["gauge-pressure"] = reference_pressure
             initialization.initialize()
 
-        return _ok(f"流场初始化完成（方法={method}）")
+        return _ok(ok_message(f"流场初始化完成（方法={method}）", method=method))
     except Exception as e:
         return _err(str(e))
 
@@ -315,7 +336,7 @@ def run_fluent_simulation(
         run_calc.iter_count = iterations
         run_calc.iterate(iter_count=iterations)
 
-        return _ok(f"流体仿真计算完成（迭代 {iterations} 步）")
+        return _ok(ok_message(f"流体仿真计算完成（迭代 {iterations} 步）", iterations=iterations, report_interval=report_interval))
     except Exception as e:
         return _err(str(e))
 
@@ -400,13 +421,17 @@ def export_fluent_data(
             if not output_path.endswith(".cas"):
                 output_path = output_path + ".cas"
             session.file.write_case_data(file_name=output_path)
-            return _ok(f"Case+Data 文件已保存至: {output_path[:-4]}.cas.gz/.dat.gz")
+            return _ok(ok_message(
+                f"Case+Data 文件已保存至: {output_path[:-4]}.cas.gz/.dat.gz",
+                output_path=output_path,
+                export_format=export_format,
+            ))
 
         # CSV 导出：通过 report 导出面数据
         if not output_path.endswith(".csv"):
             output_path = output_path + ".csv"
 
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        ensure_parent_dir(output_path)
 
         if surfaces is None:
             surfaces = ["inlet", "outlet"]
@@ -436,7 +461,13 @@ def export_fluent_data(
                 writer.writeheader()
                 writer.writerows(rows)
 
-        return _ok(f"结果已导出至: {output_path}（{len(rows)} 个面，{len(quantities)} 个物理量）")
+        return _ok(ok_message(
+            f"结果已导出至: {output_path}（{len(rows)} 个面，{len(quantities)} 个物理量）",
+            output_path=output_path,
+            surfaces=surfaces,
+            quantities=quantities,
+            export_format=export_format,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -516,6 +547,6 @@ def setup_fluid_material(
         if specific_heat is not None:
             info_parts.append(f"比热容={specific_heat} J/(kg·K)")
 
-        return _ok("，".join(info_parts))
+        return _ok(ok_message("，".join(info_parts), material_name=material_name, density_model=density_model))
     except Exception as e:
         return _err(str(e))

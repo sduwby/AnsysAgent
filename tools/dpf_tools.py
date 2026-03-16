@@ -6,7 +6,7 @@ PyDPF-Post 工具：通过 Ansys PyDPF-Post 对 MAPDL/Mechanical 仿真结果进
 
 from __future__ import annotations
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, ensure_parent_dir
 
 _dpf_solution = None  # 全局 DPF 仿真结果对象
 
@@ -224,6 +224,7 @@ def export_dpf_results_to_csv(
     try:
         import csv as csv_mod
         sol = _sol()
+        ensure_parent_dir(output_path)
 
         # 获取节点坐标
         mesh = sol.mesh

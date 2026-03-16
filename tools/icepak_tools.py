@@ -5,7 +5,7 @@ Icepak 热分析工具：通过 PyAEDT 驱动 Ansys Icepak 进行电机热仿真
 
 from __future__ import annotations
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, assign_power_sources, ok_message
 
 _icepak_app = None  # 全局 Icepak 实例
 
@@ -30,7 +30,7 @@ def connect_icepak(version: str = "2024.1", non_graphical: bool = False) -> dict
             non_graphical=non_graphical,
             new_desktop=False,
         )
-        return _ok(f"已连接到 Icepak {version}")
+        return _ok(ok_message(f"已连接到 Icepak {version}", version=version))
     except Exception as e:
         return _err(str(e))
 
@@ -60,26 +60,22 @@ def setup_motor_thermal(
         app.modeler.set_working_coordinate_system("Global")
 
         # 为绕组和铁芯分配热源
-        for obj_name in ["Winding", "Stator", "Rotor"]:
-            try:
-                obj = app.modeler.get_object_from_name(obj_name)
-                if obj:
-                    # PMSM 铁耗分布：定子铁耗约占 90%，转子铁耗约占 10%
-                    # 不采用等分，避免严重高估转子温升
-                    if "Winding" in obj_name:
-                        loss = copper_loss_W
-                    elif "Stator" in obj_name:
-                        loss = iron_loss_W * 0.9
-                    else:  # Rotor
-                        loss = iron_loss_W * 0.1
-                    app.assign_source(
-                        obj_name,
-                        "TotalPower",
-                        thermal_condition="Total Power",
-                        assignment_value=f"{loss}W",
-                    )
-            except Exception:
-                pass
+        assignment = assign_power_sources(app, {
+            "Winding": copper_loss_W,
+            "Stator": iron_loss_W * 0.9,
+            "Rotor": iron_loss_W * 0.1,
+        })
+        assigned_sources = [item.split("=", 1)[0] for item in assignment["assigned"]]
+        missing_objects = assignment["missing"]
+        source_errors = assignment["errors"]
+
+        if not assigned_sources:
+            details = []
+            if missing_objects:
+                details.append(f"缺少对象: {', '.join(missing_objects)}")
+            if source_errors:
+                details.append(f"热源分配失败: {'; '.join(source_errors)}")
+            return _err("未能成功分配任何热源。" + (" " + " | ".join(details) if details else ""))
 
         # 设置对流冷却边界
         if cooling_type == "natural_convection":
@@ -94,7 +90,15 @@ def setup_motor_thermal(
                 temperature=f"{ambient_temp_C}cel",
             )
 
-        return _ok(f"热分析边界已设置：铜耗={copper_loss_W}W，铁耗={iron_loss_W}W，冷却={cooling_type}")
+        msg = (
+            f"热分析边界已设置：铜耗={copper_loss_W}W，铁耗={iron_loss_W}W，"
+            f"冷却={cooling_type}，热源对象={', '.join(assigned_sources)}"
+        )
+        if missing_objects:
+            msg += f"；未找到对象={', '.join(missing_objects)}"
+        if source_errors:
+            msg += f"；部分热源分配失败={'; '.join(source_errors)}"
+        return _ok(msg)
     except Exception as e:
         return _err(str(e))
 
@@ -114,7 +118,7 @@ def run_thermal_simulation(setup_name: str = "SetupThermal") -> dict:
             setup.props["Convergence Criteria - Max Iterations"] = 100
             setup.update()
         app.analyze_setup(setup_name)
-        return _ok(f"热仿真 '{setup_name}' 完成")
+        return _ok(ok_message(f"热仿真 '{setup_name}' 完成", setup_name=setup_name))
     except Exception as e:
         return _err(str(e))
 

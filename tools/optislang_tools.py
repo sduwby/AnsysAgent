@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings, ok_message
 
 # ansys-optislang-core 延迟导入，允许在未安装 Ansys 的环境中加载模块
 _osl = None  # 全局 optiSLang 实例
@@ -45,7 +45,7 @@ def connect_optislang(
     try:
         from ansys.optislang.core import Optislang
         _osl = Optislang(host=host, port=port, ini_timeout=timeout)
-        return _ok(f"已连接到 optiSLang @ {host}:{port}")
+        return _ok(ok_message(f"已连接到 optiSLang @ {host}:{port}", host=host, port=port, timeout=timeout))
     except Exception as e:
         return _err(str(e))
 
@@ -78,7 +78,12 @@ def create_optimization_project(
         _osl_config["algorithm"] = algorithm
         _osl_config["max_iterations"] = max_iterations
         _osl_config["project_path"] = project_path
-        return _ok(f"优化项目已创建：{project_path}，算法：{algorithm}，最大迭代：{max_iterations}")
+        return _ok(ok_message(
+            f"优化项目已创建：{project_path}，算法：{algorithm}，最大迭代：{max_iterations}",
+            project_path=project_path,
+            algorithm=algorithm,
+            max_iterations=max_iterations,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -109,6 +114,7 @@ def add_design_variable(
         osl = _get_osl()
         init = initial_value if initial_value is not None else (lower_bound + upper_bound) / 2
         ref = reference_value if reference_value is not None else init
+        warnings: list[str] = []
         root_system = osl.application.project.root_system
         param = OptimizationParameter(
             name=name,
@@ -116,8 +122,26 @@ def add_design_variable(
             lower_bound=lower_bound,
             upper_bound=upper_bound,
         )
+        initial_applied = False
+        for attr_name in ("initial_value", "start_value", "value"):
+            if hasattr(param, attr_name):
+                try:
+                    setattr(param, attr_name, init)
+                    initial_applied = True
+                    break
+                except Exception as e:
+                    warnings.append(f"{attr_name} 写入失败: {e}")
         root_system.parameter_manager.add_parameter(param)
-        return _ok(f"设计变量已添加：{name} ∈ [{lower_bound}, {upper_bound}]，参考值 {ref}")
+        if not initial_applied and initial_value is not None:
+            warnings.append("当前 optiSLang 参数对象未暴露可写的初始值属性，initial_value 未生效")
+        return _ok(append_warnings(ok_message(
+            f"设计变量已添加：{name} ∈ [{lower_bound}, {upper_bound}]，参考值 {ref}",
+            name=name,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            initial_value=init,
+            reference_value=ref,
+        ), warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -156,7 +180,7 @@ def add_response(
                 criterion=target,
             )
             cm.add_criterion(criterion)
-            return _ok(f"目标函数已添加：{target} {name}")
+            return _ok(ok_message(f"目标函数已添加：{target} {name}", name=name, response_type=response_type, target=target))
         elif response_type == "constraint":
             lim = limit if limit is not None else 0.0
             criterion = ConstraintCriterion(
@@ -166,7 +190,7 @@ def add_response(
                 limit=lim,
             )
             cm.add_criterion(criterion)
-            return _ok(f"约束已添加：{name} ≤ {lim}")
+            return _ok(ok_message(f"约束已添加：{name} ≤ {lim}", name=name, response_type=response_type, limit=lim))
         else:
             return _err(f"未知 response_type：{response_type}，请使用 'objective' 或 'constraint'")
     except Exception as e:
@@ -196,7 +220,11 @@ def run_sensitivity_study(
         # osl.project.start() 会阻塞直到 optiSLang 完成所有计算
         # 具体的敏感性分析方法和采样点数须在 optiSLang 项目工作流节点中预先配置
         osl.application.project.start()
-        return _ok(f"敏感性分析已完成：{method} 方法，{num_designs} 个设计点（目标值）")
+        return _ok(ok_message(
+            f"敏感性分析已完成：{method} 方法，{num_designs} 个设计点（目标值）",
+            method=method,
+            num_designs=num_designs,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -230,7 +258,12 @@ def run_optimization(
         })
         # osl.application.project.start() 阻塞直到优化完成
         osl.application.project.start()
-        return _ok(f"优化已完成：{algorithm}，最大 {max_iterations} 次迭代，{num_parallel_runs} 并行")
+        return _ok(ok_message(
+            f"优化已完成：{algorithm}，最大 {max_iterations} 次迭代，{num_parallel_runs} 并行",
+            algorithm=algorithm,
+            max_iterations=max_iterations,
+            num_parallel_runs=num_parallel_runs,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -252,17 +285,63 @@ def get_optimization_results() -> dict:
     try:
         osl = _get_osl()
         root_system = osl.application.project.root_system
-        # get_reference_design() 返回优化后的参考（最优）设计
-        # 每个 Design 对象通过 .parameters 和 .responses 访问，各自有 .name 和 .value/.reference_value 属性
-        design = root_system.get_reference_design()
+        warnings: list[str] = []
+
+        design = None
+        candidate_getters = (
+            "get_best_design",
+            "get_optimum_design",
+            "get_reference_design",
+        )
+        used_getter = None
+        for getter_name in candidate_getters:
+            getter = getattr(root_system, getter_name, None)
+            if callable(getter):
+                candidate = getter()
+                if candidate is not None:
+                    design = candidate
+                    used_getter = getter_name
+                    break
         if design is None:
             return _err("优化结果为空，请确认优化已完成。")
-        params = {p.name: p.reference_value for p in design.parameters}
-        responses = {r.name: r.value for r in design.responses}
-        return _ok({
+
+        if used_getter == "get_reference_design":
+            warnings.append("当前结果基于 reference design 读取，未能确认其一定等于全局最优设计")
+
+        params = {}
+        for p in getattr(design, "parameters", []):
+            value = getattr(p, "value", None)
+            if value is None:
+                value = getattr(p, "reference_value", None)
+            params[p.name] = value
+
+        responses = {}
+        for r in getattr(design, "responses", []):
+            value = getattr(r, "value", None)
+            if value is None:
+                value = getattr(r, "reference_value", None)
+            responses[r.name] = value
+
+        num_evaluations = None
+        for owner in (design, root_system, getattr(osl.application, "project", None)):
+            if owner is None:
+                continue
+            for attr in ("num_evaluations", "number_of_evaluations", "evaluated_designs"):
+                value = getattr(owner, attr, None)
+                if isinstance(value, int):
+                    num_evaluations = value
+                    break
+            if num_evaluations is not None:
+                break
+
+        result = {
             "best_design": params,
             "best_objectives": responses,
-        })
+            "result_source": used_getter,
+        }
+        if num_evaluations is not None:
+            result["num_evaluations"] = num_evaluations
+        return _ok(append_warnings(result, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -317,6 +396,6 @@ def disconnect_optislang() -> dict:
         if _osl is not None:
             _osl.dispose()
             _osl = None
-        return _ok("已断开 optiSLang 连接")
+        return _ok(ok_message("已断开 optiSLang 连接", disconnected=True))
     except Exception as e:
         return _err(str(e))

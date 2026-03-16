@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import re
+
 from tools.maxwell_tools import _app
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, create_report_and_get_data, ensure_parent_dir, ok_message
 
 
 def _report_category(app) -> str:
@@ -22,6 +24,25 @@ def _report_category(app) -> str:
     return "Standard"
 
 
+def _parse_numeric_value(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if value is None:
+        raise ValueError("empty value")
+    text = str(value).strip()
+    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+    if not match:
+        raise ValueError(f"cannot parse numeric value from {text!r}")
+    return float(match.group(0))
+
+
+def _require_series(data, expression: str, error_message: str):
+    values = data.data_real(expression)
+    if not values:
+        raise ValueError(error_message)
+    return values
+
+
 # ---------------------------------------------------------------------------
 # 工具：get_torque - 提取转矩
 # ---------------------------------------------------------------------------
@@ -35,21 +56,16 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
     """
     try:
         app = _app()
-        # 瞬态仿真：获取时域转矩波形
-        # 若同名报告已存在则先删除，避免重复创建报错
-        report_name = "TorqueReport"
-        if report_name in app.post.all_report_names:
-            app.post.delete_report(report_name)
-        report = app.post.create_report(
+        data = create_report_and_get_data(
+            app.post,
             expressions=["Moving1.Torque"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category=_report_category(app),
-            report_name=report_name,
+            report_name="TorqueReport",
         )
-        data = report.get_solution_data()
         times = data.primary_sweep_values
-        torques = data.data_real("Moving1.Torque")
-        avg = sum(torques) / len(torques) if torques else 0.0
+        torques = _require_series(data, "Moving1.Torque", "未获取到转矩数据，请确认已完成求解并存在运动设置")
+        avg = sum(torques) / len(torques)
 
         return _ok({
             "avg_torque_Nm": round(avg, 4),
@@ -71,19 +87,20 @@ def get_back_emf(
     """提取指定相的反电动势波形。"""
     try:
         app = _app()
-        report_name = "BackEMFReport"
-        if report_name in app.post.all_report_names:
-            app.post.delete_report(report_name)
-        report = app.post.create_report(
+        data = create_report_and_get_data(
+            app.post,
             expressions=[f"InducedVoltage({phase_name})"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category=_report_category(app),
-            report_name=report_name,
+            report_name="BackEMFReport",
         )
-        data = report.get_solution_data()
         times = data.primary_sweep_values
-        voltages = data.data_real(f"InducedVoltage({phase_name})")
-        peak = max(abs(v) for v in voltages) if voltages else 0.0
+        voltages = _require_series(
+            data,
+            f"InducedVoltage({phase_name})",
+            f"未获取到相 {phase_name} 的反电动势数据，请确认绕组和求解类型配置正确",
+        )
+        peak = max(abs(v) for v in voltages)
 
         return _ok({
             "phase": phase_name,
@@ -131,20 +148,17 @@ def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
     try:
         app = _app()
         expressions = ["CoreLoss", "OhmicLoss"]
-        report_name = "LossReport"
-        if report_name in app.post.all_report_names:
-            app.post.delete_report(report_name)
-        report = app.post.create_report(
+        data = create_report_and_get_data(
+            app.post,
             expressions=expressions,
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category=_report_category(app),
-            report_name=report_name,
+            report_name="LossReport",
         )
-        data = report.get_solution_data()
-        core_loss = data.data_real("CoreLoss")
-        ohmic_loss = data.data_real("OhmicLoss")
-        avg_core = sum(core_loss) / len(core_loss) if core_loss else 0.0
-        avg_ohmic = sum(ohmic_loss) / len(ohmic_loss) if ohmic_loss else 0.0
+        core_loss = _require_series(data, "CoreLoss", "未获取到铁耗数据，请确认损耗求解已完成")
+        ohmic_loss = _require_series(data, "OhmicLoss", "未获取到铜耗数据，请确认导体损耗求解已完成")
+        avg_core = sum(core_loss) / len(core_loss)
+        avg_ohmic = sum(ohmic_loss) / len(ohmic_loss)
 
         return _ok({
             "avg_core_loss_W": round(avg_core, 4),
@@ -183,8 +197,9 @@ def export_results(output_path: str, result_type: str = "torque") -> dict:
         if report_name not in all_reports:
             return _err(f"报告 '{report_name}' 不存在，请先调用对应的 get_* 工具。")
 
+        ensure_parent_dir(output_path)
         app.post.export_report_to_file(report_name, output_path)
-        return _ok(f"结果已导出到：{output_path}")
+        return _ok(ok_message(f"结果已导出到：{output_path}", output_path=output_path, result_type=result_type))
     except Exception as e:
         return _err(str(e))
 
@@ -218,23 +233,18 @@ def get_inductance(
         # 提取各相自感（相—相电感矩阵对角元素）
         # L(PhaseA, PhaseA) 为 PhaseA 的自感，单位 H
         expressions = [f"L({p},{p})" for p in phases]
-        report_name = "InductanceReport"
-        if report_name in app.post.all_report_names:
-            app.post.delete_report(report_name)
-
-        report = app.post.create_report(
+        data = create_report_and_get_data(
+            app.post,
             expressions=expressions,
             setup_sweep_name=f"{setup_name} : {sweep_name}",
-            report_name=report_name,
+            report_name="InductanceReport",
         )
-        data = report.get_solution_data()
 
         inductances = {}
         for expr, phase in zip(expressions, phases):
-            vals = data.data_real(expr)
-            if vals:
-                avg_L = sum(vals) / len(vals)
-                inductances[f"L_{phase}_H"] = round(avg_L, 9)
+            vals = _require_series(data, expr, f"未获取到 {phase} 的自感数据，请确认相关表达式可用")
+            avg_L = sum(vals) / len(vals)
+            inductances[f"L_{phase}_H"] = round(avg_L, 9)
 
         # 近似 dq 电感（对称三相绕组）：
         # Ld ≈ Laa - Mab（直轴分量），Lq ≈ Laa + Mab（交轴分量）
@@ -244,6 +254,8 @@ def get_inductance(
         if l_avg is not None:
             inductances["Ld_approx_H"] = round(l_avg, 9)
             inductances["Lq_approx_H"] = round(l_avg, 9)
+            inductances["dq_inductance_is_approximate"] = True
+            inductances["dq_inductance_method"] = "phase_self_inductance_average"
             inductances["note"] = (
                 "Ld/Lq 为相自感近似值；精确分析需在不同电流角下运行多次磁静态仿真"
             )
@@ -280,27 +292,22 @@ def get_flux_linkage(
             phases = ["PhaseA", "PhaseB", "PhaseC"]
 
         expressions = [f"FluxLinkage({p})" for p in phases]
-        report_name = "FluxLinkageReport"
-        if report_name in app.post.all_report_names:
-            app.post.delete_report(report_name)
-
-        report = app.post.create_report(
+        data = create_report_and_get_data(
+            app.post,
             expressions=expressions,
             setup_sweep_name=f"{setup_name} : {sweep_name}",
             report_category=_report_category(app),
-            report_name=report_name,
+            report_name="FluxLinkageReport",
         )
-        data = report.get_solution_data()
         times = data.primary_sweep_values
 
         result = {}
         waveforms = {}
         peaks = {}
         for expr, phase in zip(expressions, phases):
-            vals = data.data_real(expr)
-            if vals:
-                peaks[phase] = round(max(abs(v) for v in vals), 6)
-                waveforms[phase] = list(zip(times, vals))
+            vals = _require_series(data, expr, f"未获取到 {phase} 的磁链数据，请确认绕组定义和求解结果")
+            peaks[phase] = round(max(abs(v) for v in vals), 6)
+            waveforms[phase] = list(zip(times, vals))
 
         result["peak_flux_linkage_Wb"] = peaks
         result["waveforms"] = waveforms
@@ -315,6 +322,9 @@ def get_flux_linkage(
                 psi_q = (2 / 3) * sum(-v * math.sin(a) for v, a in zip(first_vals, angles))
                 result["psi_d_Wb"] = round(psi_d, 6)
                 result["psi_q_Wb"] = round(psi_q, 6)
+                result["dq_snapshot_only"] = True
+                result["dq_electrical_angle_deg"] = 0.0
+                result["dq_note"] = "psi_d/psi_q 基于首个时刻快照和固定 0° 电角度，仅作快速参考"
             except Exception:
                 pass
 
@@ -346,16 +356,12 @@ def get_cogging_torque(
     """
     try:
         app = _app()
-        report_name = "CoggingTorqueReport"
-        if report_name in app.post.all_report_names:
-            app.post.delete_report(report_name)
-
-        report = app.post.create_report(
+        data = create_report_and_get_data(
+            app.post,
             expressions=["Moving1.Torque"],
             setup_sweep_name=f"{setup_name} : {sweep_name}",
-            report_name=report_name,
+            report_name="CoggingTorqueReport",
         )
-        data = report.get_solution_data()
         positions = data.primary_sweep_values  # 转子位置（度）
         torques = data.data_real("Moving1.Torque")
 
@@ -410,23 +416,24 @@ def get_efficiency_map(
         )
 
         efficiency_map = []
+        skipped_points = 0
         for variation in sweep_results:
             try:
-                speed_rpm = float(variation.get(speed_param, 0))
-                current_A = float(variation.get(current_param, 0))
+                speed_rpm = _parse_numeric_value(variation.get(speed_param, 0))
+                current_A = _parse_numeric_value(variation.get(current_param, 0))
                 # 转矩表达式名在 create_2d_sweep 中为 "Moving1.Torque"（带运动体前缀），
                 # 此处兼容不同版本/配置下的多种可能键名
-                torque_Nm = float(
+                torque_Nm = _parse_numeric_value(
                     variation.get("Moving1.Torque")
                     or variation.get("Torque")
                     or 0
                 )
-                core_loss_W = float(
+                core_loss_W = _parse_numeric_value(
                     variation.get("CoreLoss")
                     or variation.get("Core Loss")
                     or 0
                 )
-                copper_loss_W = float(
+                copper_loss_W = _parse_numeric_value(
                     variation.get("OhmicLoss")
                     or variation.get("Ohmic Loss")
                     or 0
@@ -447,6 +454,7 @@ def get_efficiency_map(
                     "p_loss_W": round(core_loss_W + copper_loss_W, 2),
                 })
             except Exception:
+                skipped_points += 1
                 continue
 
         if not efficiency_map:
@@ -457,6 +465,7 @@ def get_efficiency_map(
 
         return _ok({
             "num_operating_points": len(efficiency_map),
+            "skipped_points": skipped_points,
             "peak_efficiency_pct": best["efficiency_pct"],
             "best_operating_point": best,
             "efficiency_map": efficiency_map,
@@ -554,4 +563,3 @@ def check_demagnetization(
         })
     except Exception as e:
         return _err(str(e))
-

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings, ensure_parent_dir, get_design_names, ok_message
 
 # PyAEDT 延迟导入，允许在未安装 Ansys 的环境中加载模块
 _aedt_app = None  # 全局 AEDT Maxwell2d/3d 实例
@@ -24,11 +24,72 @@ def _app():
     return _aedt_app
 
 
+def _get_setup_names(app) -> list[str]:
+    existing = getattr(app, "existing_analysis_setups", None)
+    if callable(existing):
+        existing = existing()
+    if existing:
+        return list(existing)
+    setups = getattr(app, "setups", None)
+    if isinstance(setups, list):
+        return [getattr(s, "name", s) for s in setups]
+    return []
+
+
+def _apply_magnetization(app, magnet_name: str, angle_deg: float) -> bool:
+    angle_value = f"{angle_deg}deg"
+    candidates = [
+        lambda: app.assign_magnetization(assignment=[magnet_name], direction=angle_value),
+        lambda: app.assign_magnetization(magnet_name, angle=angle_value),
+        lambda: app.modeler.get_object_from_name(magnet_name).set_magnetization(angle_value),
+        lambda: setattr(app.modeler.get_object_from_name(magnet_name), "magnetization_angle", angle_value),
+    ]
+    for setter in candidates:
+        try:
+            setter()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _configure_rotation_motion(app, rotor_name: str, airgap_name: str) -> bool:
+    candidates = [
+        lambda: app.assign_rotate_motion(
+            assignment=[rotor_name],
+            coordinate_system="Global",
+            axis="Z",
+            positive_movement=True,
+        ),
+        lambda: app.assign_rotation(
+            object_list=[rotor_name],
+            axis="Z",
+        ),
+        lambda: app.modeler.create_band(
+            rotor_name=rotor_name,
+            airgap_name=airgap_name,
+            band_name="MotionBand",
+        ),
+    ]
+    for setter in candidates:
+        try:
+            setter()
+            return True
+        except Exception:
+            continue
+    return False
+
 # ---------------------------------------------------------------------------
 # 工具：connect_aedt - 连接 AEDT
 # ---------------------------------------------------------------------------
 
-def connect_aedt(version: str = "2024.1", is_3d: bool = False, non_graphical: bool = False) -> dict:
+def connect_aedt(
+    version: str = "2024.1",
+    is_3d: bool = False,
+    non_graphical: bool = False,
+    project_path: str = "",
+    design_name: str = "",
+) -> dict:
     """
     连接到运行中的 AEDT 实例或启动新实例。
 
@@ -36,24 +97,39 @@ def connect_aedt(version: str = "2024.1", is_3d: bool = False, non_graphical: bo
         version: AEDT 版本号，如 "2024.1"
         is_3d: True 使用 Maxwell 3D，False 使用 Maxwell 2D
         non_graphical: 是否无界面运行（批处理模式）
+        project_path: 目标项目路径或项目名；留空则连接当前活动项目
+        design_name: 目标设计名；留空则使用当前活动设计
     """
     global _aedt_app
     try:
+        kwargs = {
+            "specified_version": version,
+            "non_graphical": non_graphical,
+            "new_desktop": False,
+        }
+        if project_path:
+            kwargs["project"] = project_path
+        if design_name:
+            kwargs["design"] = design_name
         if is_3d:
             from ansys.aedt.core import Maxwell3d
-            _aedt_app = Maxwell3d(
-                specified_version=version,
-                non_graphical=non_graphical,
-                new_desktop=False,
-            )
+            _aedt_app = Maxwell3d(**kwargs)
         else:
             from ansys.aedt.core import Maxwell2d
-            _aedt_app = Maxwell2d(
-                specified_version=version,
-                non_graphical=non_graphical,
-                new_desktop=False,
-            )
-        return _ok(f"已连接到 AEDT {version}（{'Maxwell 3D' if is_3d else 'Maxwell 2D'}）")
+            _aedt_app = Maxwell2d(**kwargs)
+        target = []
+        if project_path:
+            target.append(f"项目={project_path}")
+        if design_name:
+            target.append(f"设计={design_name}")
+        target_desc = f"，{', '.join(target)}" if target else ""
+        return _ok(ok_message(
+            f"已连接到 AEDT {version}（{'Maxwell 3D' if is_3d else 'Maxwell 2D'}{target_desc}）",
+            version=version,
+            is_3d=is_3d,
+            project_path=project_path or None,
+            design_name=design_name or None,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -67,17 +143,35 @@ def create_maxwell_project(project_name: str, design_name: str = "Motor") -> dic
     import os
     try:
         app = _app()
-        # 确保 project_name 是带 .aedt 扩展名的合法路径
-        # save_project() 保存当前（新建）项目到指定路径，起到命名+持久化的作用
         if not project_name.endswith(".aedt"):
             project_name = project_name + ".aedt"
         if not os.path.isabs(project_name):
             project_name = os.path.join(os.getcwd(), project_name)
+
+        # 显式新建项目，避免把当前已打开项目误当成“新项目”继续写入。
+        if hasattr(app, "odesktop") and hasattr(app.odesktop, "NewProject"):
+            app.odesktop.NewProject()
+
+        # 显式新建设计；如果当前已有默认设计则仅重命名该设计。
+        design_names = get_design_names(app)
+        if design_names:
+            active_design = getattr(app, "active_design", None)
+            if active_design is not None:
+                active_design.name = design_name
+        elif hasattr(app, "insert_design"):
+            app.insert_design(design_name=design_name)
+        elif hasattr(app, "new_design"):
+            app.new_design(design_name=design_name)
+        else:
+            raise RuntimeError("当前 AEDT 接口不支持创建新设计")
+
+        ensure_parent_dir(project_name)
         app.save_project(project_name)
-        # 重命名当前激活设计
-        if app.design_list:
-            app.active_design.name = design_name
-        return _ok(f"项目 '{project_name}' 已创建，设计名：'{design_name}'")
+        return _ok(ok_message(
+            f"项目 '{project_name}' 已创建，设计名：'{design_name}'",
+            project_name=project_name,
+            design_name=design_name,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -109,6 +203,8 @@ def create_motor_geometry(
         return _err("转子内径必须小于外径")
     if num_slots <= 0 or num_poles <= 0:
         return _err("槽数和极数必须为正整数")
+    if num_poles % 2 != 0:
+        return _err("PMSM 极数必须为偶数")
     if magnet_thickness <= 0:
         return _err("永磁体厚度必须为正值")
     if magnet_thickness >= (stator_inner_radius - rotor_outer_radius):
@@ -116,6 +212,7 @@ def create_motor_geometry(
     try:
         app = _app()
         modeler = app.modeler
+        warnings: list[str] = []
 
         # 定子轭部（环形）
         modeler.create_circle(
@@ -194,6 +291,7 @@ def create_motor_geometry(
             start_angle = i * pole_angle - magnet_arc / 2
             end_angle = start_angle + magnet_arc
             obj_name = f"Magnet_{i+1}"
+            magnetization_angle = i * pole_angle if i % 2 == 0 else i * pole_angle + 180.0
 
             # 外弧点列（start_angle → end_angle）
             outer_pts = [
@@ -221,6 +319,8 @@ def create_motor_geometry(
                 name=obj_name,
                 matname="NdFe35",
             )
+            if not _apply_magnetization(app, obj_name, magnetization_angle):
+                warnings.append(f"未能自动设置 {obj_name} 的磁化方向（目标角度 {magnetization_angle:.1f}deg）")
 
         # 定子槽内铜导体：每槽一个扇形面
         # 槽深取定子轭部厚度的 60%，槽宽取槽距的 70%（含绝缘余量）
@@ -263,10 +363,45 @@ def create_motor_geometry(
             # 从定子铁心挖去导体区域，keep_originals=True 保留导体对象
             modeler.subtract("Stator", cond_name, keep_originals=True)
 
-        return _ok(
+        stack_length_applied = False
+        for setter in (
+            lambda: app.change_design_settings({"ModelDepth": f"{stack_length}mm"}),
+            lambda: setattr(app, "model_depth", stack_length),
+            lambda: app.odesign.SetDesignSettings(
+                ["NAME:Design Settings Data", "ModelDepth:=", f"{stack_length}mm"]
+            ),
+        ):
+            try:
+                setter()
+                stack_length_applied = True
+                break
+            except Exception:
+                continue
+        if not stack_length_applied:
+            warnings.append(
+                "未能将 stack_length 写入 Maxwell 2D 的模型深度设置，请在 AEDT 中复核 ModelDepth"
+            )
+        motion_configured = _configure_rotation_motion(app, "Rotor", "AirGap")
+        if not motion_configured:
+            warnings.append(
+                "未能自动建立旋转运动带/主运动设置，若直接提取 Moving1.Torque 可能无有效结果"
+            )
+        magnetization_configured = not any("磁化方向" in warning for warning in warnings)
+        if not magnetization_configured:
+            warnings.append("请在 AEDT 中复核永磁体极性交替磁化方向后再做精确 PMSM 仿真")
+
+        return _ok(append_warnings(ok_message(
             f"电机几何已建立：{num_slots} 槽，{num_poles} 极，"
-            f"定子外径={stator_outer_radius*2}mm，转子外径={rotor_outer_radius*2}mm"
-        )
+            f"定子外径={stator_outer_radius*2}mm，转子外径={rotor_outer_radius*2}mm",
+            num_slots=num_slots,
+            num_poles=num_poles,
+            stator_outer_diameter_mm=stator_outer_radius * 2,
+            rotor_outer_diameter_mm=rotor_outer_radius * 2,
+            stack_length_mm=stack_length,
+            magnetization_configured=magnetization_configured,
+            motion_configured=motion_configured,
+            torque_ready=bool(magnetization_configured and motion_configured),
+        ), warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -281,7 +416,11 @@ def assign_material(object_name: str, material_name: str) -> dict:
         app = _app()
         obj = app.modeler.get_object_from_name(object_name)
         obj.material_name = material_name
-        return _ok(f"已将材料 '{material_name}' 赋予 '{object_name}'")
+        return _ok(ok_message(
+            f"已将材料 '{material_name}' 赋予 '{object_name}'",
+            object_name=object_name,
+            material_name=material_name,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -309,11 +448,32 @@ def setup_winding(
     """
     try:
         app = _app()
-        app.assign_coil(
-            input_object=conductor_names,
-            conductors_type="Stranded",
-            winding_name=phase_name,
-        )
+        if not conductor_names:
+            return _err("conductor_names 不能为空")
+
+        modeler = app.modeler
+        get_object = getattr(modeler, "get_object_from_name", None)
+        missing_conductors = []
+        if callable(get_object):
+            missing_conductors = [name for name in conductor_names if get_object(name) is None]
+        if missing_conductors:
+            return _err(f"以下导体对象不存在: {', '.join(missing_conductors)}")
+
+        coil_terminals = []
+        for conductor_name in conductor_names:
+            coil_result = app.assign_coil(
+                input_object=[conductor_name],
+                conductors_type="Stranded",
+                winding_name=phase_name,
+            )
+            coil_name = None
+            for attr in ("name", "coil_name"):
+                coil_name = getattr(coil_result, attr, None)
+                if coil_name:
+                    break
+            if not coil_name and isinstance(coil_result, str):
+                coil_name = coil_result
+            coil_terminals.append(coil_name or conductor_name)
         # 始终使用 "Current" 类型：
         #   - 磁静态（frequency=0）：直流电流表达式 "XA"
         #   - 瞬态/交流（frequency>0）：正弦电流表达式（Maxwell 内嵌函数）
@@ -326,13 +486,20 @@ def setup_winding(
         else:
             current_expr = f"{current_amplitude}A"
         app.assign_winding(
-            coil_terminals=[phase_name],
+            coil_terminals=coil_terminals,
             winding_name=phase_name,
             winding_type="Current",
             current_value=current_expr,
             phase_angle=f"{phase_angle}deg",
         )
-        return _ok(f"绕组 '{phase_name}' 已配置：{current_amplitude}A @ {phase_angle}°")
+        return _ok(ok_message(
+            f"绕组 '{phase_name}' 已配置：{current_amplitude}A @ {phase_angle}°",
+            phase_name=phase_name,
+            conductor_names=conductor_names,
+            current_amplitude=current_amplitude,
+            frequency=frequency,
+            phase_angle=phase_angle,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -342,6 +509,7 @@ def setup_winding(
 # ---------------------------------------------------------------------------
 
 def add_solution_setup(
+    setup_name: str = "Setup1",
     solver_type: str = "Transient",
     stop_time: float = 0.02,
     time_step: float = 0.0001,
@@ -352,6 +520,7 @@ def add_solution_setup(
     添加求解设置。
 
     Args:
+        setup_name: 求解设置名称
         solver_type: "Transient"（瞬态）| "Magnetostatic"（磁静态）| "EddyCurrent"（涡流）
         stop_time: 仿真结束时间（秒，瞬态专用）
         time_step: 时间步长（秒，瞬态专用）
@@ -360,23 +529,38 @@ def add_solution_setup(
     """
     try:
         app = _app()
+        if num_passes <= 0:
+            return _err("num_passes 必须为正整数")
         if solver_type == "Transient":
-            setup = app.create_setup(name="Setup1")
+            if stop_time <= 0 or time_step <= 0:
+                return _err("Transient 求解要求 stop_time 和 time_step 都为正值")
+            if time_step >= stop_time:
+                return _err("Transient 求解要求 time_step 小于 stop_time")
+        if solver_type == "EddyCurrent" and frequency_Hz <= 0:
+            return _err("EddyCurrent 求解要求 frequency_Hz 为正值")
+
+        if solver_type == "Transient":
+            setup = app.create_setup(name=setup_name)
             setup.props["StopTime"] = f"{stop_time}s"
             setup.props["TimeStep"] = f"{time_step}s"
+            setup.props["MaximumPasses"] = num_passes
             setup.update()
         elif solver_type == "Magnetostatic":
-            setup = app.create_setup(name="Setup1")
+            setup = app.create_setup(name=setup_name)
             setup.props["MaximumPasses"] = num_passes
             setup.update()
         elif solver_type == "EddyCurrent":
-            setup = app.create_setup(name="Setup1")
+            setup = app.create_setup(name=setup_name)
             setup.props["MaximumPasses"] = num_passes
             setup.props["Frequency"] = f"{frequency_Hz}Hz"
             setup.update()
         else:
             return _err(f"未知求解器类型：{solver_type}")
-        return _ok(f"求解设置已添加：{solver_type}")
+        return _ok(ok_message(
+            f"求解设置已添加：{setup_name}（{solver_type}）",
+            setup_name=setup_name,
+            solver_type=solver_type,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -389,8 +573,11 @@ def run_simulation(setup_name: str = "Setup1") -> dict:
     """运行（求解）指定设置的仿真。"""
     try:
         app = _app()
+        setup_names = _get_setup_names(app)
+        if setup_names and setup_name not in setup_names:
+            return _err(f"求解设置不存在: {setup_name}；当前可用: {', '.join(setup_names)}")
         app.analyze_setup(setup_name)
-        return _ok(f"仿真 '{setup_name}' 已完成")
+        return _ok(ok_message(f"仿真 '{setup_name}' 已完成", setup_name=setup_name))
     except Exception as e:
         return _err(str(e))
 
@@ -458,7 +645,7 @@ def create_custom_material(
             parts.append(f"μr={permeability}")
         if core_loss_kh is not None:
             parts.append(f"铁耗系数 Kh={core_loss_kh}")
-        return _ok("，".join(parts))
+        return _ok(ok_message("，".join(parts), material_name=material_name))
     except Exception as e:
         return _err(str(e))
 

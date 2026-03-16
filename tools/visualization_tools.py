@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings, ensure_parent_dir
 
 
 def _app():
@@ -129,12 +129,11 @@ def export_field_image(
     """
     try:
         app = _app()
+        warnings: list[str] = []
         if not output_path.lower().endswith(".png"):
             output_path += ".png"
 
-        parent_dir = os.path.dirname(os.path.abspath(output_path))
-        if parent_dir:
-            os.makedirs(parent_dir, exist_ok=True)
+        ensure_parent_dir(output_path)
 
         # 设置视角（若指定）
         if orientation:
@@ -150,8 +149,10 @@ def export_field_image(
                     app.post.SetActiveVariation(
                         "Orient", orient_map[orientation.upper()]
                     )
-            except Exception:
-                pass
+                else:
+                    warnings.append(f"未知视角方向: {orientation}")
+            except Exception as e:
+                warnings.append(f"视角设置失败: {e}")
 
         # 导出图像
         app.post.export_field_image_to_file(
@@ -162,13 +163,13 @@ def export_field_image(
         )
 
         file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-        return _ok({
+        return _ok(append_warnings({
             "output_path": output_path,
             "width": width,
             "height": height,
             "file_size_kb": round(file_size / 1024, 1),
             "message": f"云图 '{plot_name}' 已导出至 {output_path}（{width}×{height}px）",
-        })
+        }, warnings))
     except Exception as e:
         return _err(str(e))
 

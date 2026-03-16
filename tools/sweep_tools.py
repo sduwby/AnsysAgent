@@ -6,7 +6,17 @@
 from __future__ import annotations
 
 from tools.maxwell_tools import _app
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, ok_message
+
+
+def _normalize_result_expression(result_expression: str) -> str:
+    mapping = {
+        "Torque": "Moving1.Torque",
+        "Moving1.Torque": "Moving1.Torque",
+        "CoreLoss": "CoreLoss",
+        "OhmicLoss": "OhmicLoss",
+    }
+    return mapping.get(result_expression, result_expression)
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +39,7 @@ def add_parametric_variable(
     try:
         app = _app()
         app.variable_manager.set_variable(name, f"{value}{unit}")
-        return _ok(f"变量 '{name}' 已设置为 {value}{unit}")
+        return _ok(ok_message(f"变量 '{name}' 已设置为 {value}{unit}", name=name, value=value, unit=unit))
     except Exception as e:
         return _err(str(e))
 
@@ -57,10 +67,19 @@ def create_parametric_sweep(
     """
     try:
         app = _app()
+        if step == 0:
+            return _err("参数扫描步长 step 不能为 0")
+        if (stop - start) * step < 0:
+            return _err("参数扫描步长方向错误：start/stop 与 step 的符号不一致")
+
         # 计算扫描点
         values = []
         current = start
-        while current <= stop + step * 0.001:
+        if step > 0:
+            condition = lambda x: x <= stop + abs(step) * 0.001
+        else:
+            condition = lambda x: x >= stop - abs(step) * 0.001
+        while condition(current):
             values.append(round(current, 6))
             current += step
 
@@ -73,7 +92,11 @@ def create_parametric_sweep(
             variation_type="LinearStep",
         )
         # Maxwell 2D 中转矩表达式须带运动体前缀 "Moving1."
-        sweep.add_calculation(setup_name, "LastAdaptive", ["Moving1.Torque", "CoreLoss"])
+        sweep.add_calculation(
+            setup_name,
+            "LastAdaptive",
+            [_normalize_result_expression("Torque"), "CoreLoss"],
+        )
         sweep.update()
 
         return _ok({
@@ -103,7 +126,10 @@ def run_parametric_sweep(sweep_name: str = "") -> dict:
             app.parametrics[sweep_name].analyze()
         else:
             app.parametrics.analyze()
-        return _ok(f"参数扫描 '{sweep_name or '全部'}' 已完成")
+        return _ok(ok_message(
+            f"参数扫描 '{sweep_name or '全部'}' 已完成",
+            sweep_name=sweep_name or "全部",
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -127,15 +153,16 @@ def get_sweep_results(
     """
     try:
         app = _app()
+        query_expression = _normalize_result_expression(result_expression)
         # 获取扫描数据
         data = app.post.get_solution_data(
-            expressions=[result_expression],
+            expressions=[query_expression],
             setup_sweep_name=f"Parametric : {sweep_name}" if sweep_name else "Parametric",
             primary_sweep_variable=param_name,
         )
 
         param_values = data.primary_sweep_values
-        result_values = data.data_real(result_expression)
+        result_values = data.data_real(query_expression)
 
         # 找到最优点
         if result_values:
@@ -147,6 +174,7 @@ def get_sweep_results(
         return _ok({
             "param": param_name,
             "expression": result_expression,
+            "queried_expression": query_expression,
             "data": dict(zip(param_values, result_values)),
             "max_value": {"param": param_values[max_idx] if param_values else None,
                           "result": result_values[max_idx] if result_values else None},
@@ -180,6 +208,8 @@ def create_2d_sweep(
     """
     try:
         app = _app()
+        if not param1_values or not param2_values:
+            return _err("二维参数扫描的两个参数取值列表都不能为空")
         total = len(param1_values) * len(param2_values)
 
         # 创建统一参数扫描，将两个参数加入同一个 ParametricSetup 形成笛卡尔积
@@ -194,7 +224,11 @@ def create_2d_sweep(
             values_list=param2_values,
             variation_type="SingleValues",
         )
-        sweep.add_calculation(setup_name, "LastAdaptive", ["Moving1.Torque", "CoreLoss", "OhmicLoss"])
+        sweep.add_calculation(
+            setup_name,
+            "LastAdaptive",
+            [_normalize_result_expression("Torque"), "CoreLoss", "OhmicLoss"],
+        )
         sweep.update()
 
         return _ok({

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, ok_message
 
 
 def _app():
@@ -47,7 +47,13 @@ def setup_length_mesh(
         detail = f"最大边长={max_element_length}mm"
         if max_elements:
             detail += f"，最多 {max_elements} 个单元"
-        return _ok(f"长度网格操作 '{operation_name}' 已添加：{object_names}，{detail}")
+        return _ok(ok_message(
+            f"长度网格操作 '{operation_name}' 已添加：{object_names}，{detail}",
+            operation_name=operation_name,
+            object_names=object_names,
+            max_element_length=max_element_length,
+            max_elements=max_elements,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -86,10 +92,15 @@ def setup_skin_depth_mesh(
             num_layers=num_layers,
             meshop_name=operation_name,
         )
-        return _ok(
+        return _ok(ok_message(
             f"集肤深度网格操作 '{operation_name}' 已添加：{object_names}，"
-            f"δ={skin_depth_mm}mm，层数={num_layers}"
-        )
+            f"δ={skin_depth_mm}mm，层数={num_layers}",
+            operation_name=operation_name,
+            object_names=object_names,
+            skin_depth_mm=skin_depth_mm,
+            max_triangle_length_mm=max_triangle_length_mm,
+            num_layers=num_layers,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -120,9 +131,12 @@ def setup_surface_mesh(
             surface_mesh_quality=quality,
             meshop_name=operation_name,
         )
-        return _ok(
-            f"曲面近似网格操作 '{operation_name}' 已添加：{object_names}，质量等级={quality}"
-        )
+        return _ok(ok_message(
+            f"曲面近似网格操作 '{operation_name}' 已添加：{object_names}，质量等级={quality}",
+            operation_name=operation_name,
+            object_names=object_names,
+            surface_quality=quality,
+        ))
     except Exception as e:
         return _err(str(e))
 

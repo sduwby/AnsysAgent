@@ -8,7 +8,7 @@ import json
 import os
 from datetime import datetime
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings, ensure_parent_dir
 
 
 # ---------------------------------------------------------------------------
@@ -45,12 +45,16 @@ def generate_report(
             if ext.lower() != ".md":
                 output_path = base + ".md"
 
-        # 确保目录存在
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        ensure_parent_dir(output_path)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(content)
 
-        return _ok(f"报告已生成：{output_path}")
+        return _ok({
+            "output_path": output_path,
+            "format": format,
+            "motor_name": motor_name,
+            "message": f"报告已生成：{output_path}",
+        })
     except Exception as e:
         return _err(str(e))
 
@@ -202,11 +206,13 @@ def export_aedt_report(
 
         os.makedirs(output_dir, exist_ok=True)
         exported = []
+        warnings: list[str] = []
         all_reports = app.post.all_report_names
         targets = report_names or all_reports
 
         for name in targets:
             if name not in all_reports:
+                warnings.append(f"报告不存在，已跳过: {name}")
                 continue
             # 导出 CSV
             csv_path = os.path.join(output_dir, f"{name}.csv")
@@ -215,13 +221,14 @@ def export_aedt_report(
             img_path = os.path.join(output_dir, f"{name}.png")
             try:
                 app.post.export_report_to_jpg(name, img_path)
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.append(f"{name} PNG 导出失败: {e}")
             exported.append(name)
 
-        return _ok({
+        return _ok(append_warnings({
             "exported_reports": exported,
             "output_dir": output_dir,
-        })
+            "message": f"已导出 {len(exported)} 个报告到 {output_dir}",
+        }, warnings))
     except Exception as e:
         return _err(str(e))

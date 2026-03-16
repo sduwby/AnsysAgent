@@ -6,7 +6,7 @@ RMXprt 快速电机初设计工具：通过 PyAEDT 驱动 Ansys RMXprt 进行解
 
 from __future__ import annotations
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings, ok_message
 
 _rmxprt_app = None  # 全局 RMXprt 实例
 
@@ -51,7 +51,11 @@ def connect_rmxprt(
             non_graphical=non_graphical,
             new_desktop=False,
         )
-        return _ok(f"已连接到 RMXprt {version}")
+        return _ok(ok_message(
+            f"已连接到 RMXprt {version}",
+            version=version,
+            non_graphical=non_graphical,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -93,8 +97,20 @@ def create_motor_from_template(
         design_name: 设计名称
     """
     try:
+        warnings: list[str] = []
         app = _app()
         solution_type = _MOTOR_TYPE_MAP.get(motor_type.upper(), motor_type)
+
+        if stator_inner_diameter >= stator_outer_diameter:
+            return _err("定子内径必须小于定子外径")
+        if rotor_outer_diameter >= stator_inner_diameter:
+            return _err("转子外径必须小于定子内径")
+        if shaft_diameter >= rotor_outer_diameter:
+            return _err("轴径必须小于转子外径")
+        if stack_length <= 0:
+            return _err("铁芯轴向长度必须为正值")
+        if num_poles <= 0 or num_slots <= 0:
+            return _err("极数和槽数必须为正整数")
 
         # 创建新设计
         app.new_design(design_name=design_name, solution_type=solution_type)
@@ -109,14 +125,18 @@ def create_motor_from_template(
             "Poles": num_poles,
             "Slots": num_slots,
         }
+        applied_design_params = 0
+        failed_design_params: list[str] = []
         for key, val in param_map.items():
             try:
                 app.odesign.SetDesignSettings([f"NAME:Design Settings Data",
                                                f"{key}:=", str(val)])
+                applied_design_params += 1
             except Exception:
-                pass  # 参数名称因电机类型而异，忽略不适用的
+                failed_design_params.append(key)
 
         # 通过 properties 设置额定工况
+        rated_settings_applied = False
         try:
             app.odesign.ChangeProperty(
                 [
@@ -133,17 +153,30 @@ def create_motor_from_template(
                     ],
                 ]
             )
-        except Exception:
-            pass
+            rated_settings_applied = True
+        except Exception as e:
+            warnings.append(f"额定工况写入失败: {e}")
 
-        return _ok({
+        if applied_design_params == 0:
+            return _err(
+                "RMXprt 模板已创建，但关键几何/极槽参数均未成功写入；"
+                "已拒绝继续使用默认模板参数伪装成用户指定设计。"
+            )
+
+        if failed_design_params:
+            warnings.append(f"部分设计参数未写入成功: {', '.join(failed_design_params)}")
+        if not rated_settings_applied:
+            warnings.append("额定工况未成功写入，请在 RMXprt 中复核额定转速/电压/功率")
+
+        return _ok(append_warnings({
             "design_name": design_name,
             "motor_type": motor_type,
+            "applied_design_params": applied_design_params,
             "message": (
                 f"RMXprt 设计 '{design_name}' 已创建（{motor_type}）。"
                 "请运行仿真设置后调用 export_to_maxwell 导出精确 FEM 模型。"
             ),
-        })
+        }, warnings))
     except Exception as e:
         return _err(str(e))
 

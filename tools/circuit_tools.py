@@ -5,7 +5,7 @@ Maxwell Circuit 工具：驱动器电路与电机联合仿真封装。
 
 from __future__ import annotations
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, append_warnings, ok_message
 
 _circuit_app = None  # 全局 Circuit 实例
 
@@ -30,7 +30,7 @@ def connect_circuit(version: str = "2024.1", non_graphical: bool = False) -> dic
             non_graphical=non_graphical,
             new_desktop=False,
         )
-        return _ok(f"已连接到 Maxwell Circuit {version}")
+        return _ok(ok_message(f"已连接到 Maxwell Circuit {version}", version=version))
     except Exception as e:
         return _err(str(e))
 
@@ -55,6 +55,8 @@ def create_inverter_circuit(
     try:
         app = _app()
         schematic = app.modeler
+        warnings: list[str] = []
+        wire_count = 0
 
         # 放置直流电压源
         schematic.schematic.add_component(
@@ -75,8 +77,8 @@ def create_inverter_circuit(
                 try:
                     comp.parameters["SwitchingFrequency"] = f"{switching_freq_Hz}Hz"
                     comp.parameters["DeadTime"] = f"{dead_time_us}us"
-                except Exception:
-                    pass  # 属性名以实际 AEDT 版本为准，确保不中断流程
+                except Exception as e:
+                    warnings.append(f"{name} 参数写入失败: {e}")
 
         # 连接直流正母线：V_DC 正极 → 各上管漏极
         bus_y_pos = 3
@@ -86,21 +88,33 @@ def create_inverter_circuit(
                 schematic.schematic.create_wire(
                     [[0, bus_y_pos], [pos[0], bus_y_pos], [pos[0], pos[1]]]
                 )
-            except Exception:
-                pass
+                wire_count += 1
+            except Exception as e:
+                warnings.append(f"正母线布线失败 @ {pos}: {e}")
         # 连接直流负母线：各下管源极 → V_DC 负极
         for pos in positions.values():
             try:
                 schematic.schematic.create_wire(
                     [[pos[0], pos[1] - 2], [pos[0], bus_y_neg], [0, bus_y_neg]]
                 )
-            except Exception:
-                pass
+                wire_count += 1
+            except Exception as e:
+                warnings.append(f"负母线布线失败 @ {pos}: {e}")
 
-        return _ok(
-            f"三相逆变器电路已创建：Vdc={dc_voltage_V}V，"
-            f"fsw={switching_freq_Hz}Hz，死区={dead_time_us}μs"
-        )
+        if wire_count == 0:
+            return _err("逆变器元件已创建，但所有母线连接均失败，电路不可用")
+
+        result = {
+            "dc_voltage_V": dc_voltage_V,
+            "switching_freq_Hz": switching_freq_Hz,
+            "dead_time_us": dead_time_us,
+            "wire_connections": wire_count,
+            "message": (
+                f"三相逆变器电路已创建：Vdc={dc_voltage_V}V，"
+                f"fsw={switching_freq_Hz}Hz，死区={dead_time_us}μs"
+            ),
+        }
+        return _ok(append_warnings(result, warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -125,7 +139,10 @@ def link_maxwell_to_circuit(maxwell_design_name: str) -> dict:
             component_name=maxwell_design_name,
             location=[8, 2],
         )
-        return _ok(f"已将 Maxwell 设计 '{maxwell_design_name}' 链接到 Circuit")
+        return _ok(ok_message(
+            f"已将 Maxwell 设计 '{maxwell_design_name}' 链接到 Circuit",
+            maxwell_design_name=maxwell_design_name,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -154,7 +171,11 @@ def run_circuit_simulation(
         ]
         setup.update()
         app.analyze_setup("TransientSetup")
-        return _ok(f"电路瞬态仿真完成，时长={stop_time_ms}ms，步长={time_step_us}μs")
+        return _ok(ok_message(
+            f"电路瞬态仿真完成，时长={stop_time_ms}ms，步长={time_step_us}μs",
+            stop_time_ms=stop_time_ms,
+            time_step_us=time_step_us,
+        ))
     except Exception as e:
         return _err(str(e))
 

@@ -171,6 +171,8 @@ TOOL_DEFINITIONS = [
                     "version": {"type": "string", "description": "AEDT 版本号，如 '2024.1'"},
                     "is_3d": {"type": "boolean", "description": "True 使用 Maxwell 3D，False 使用 Maxwell 2D"},
                     "non_graphical": {"type": "boolean", "description": "是否无界面运行（批处理模式）"},
+                    "project_path": {"type": "string", "description": "项目路径或项目名；留空则连接当前活动项目"},
+                    "design_name": {"type": "string", "description": "目标设计名；留空则使用当前活动设计"},
                 },
             },
         },
@@ -194,7 +196,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_motor_geometry",
-            "description": "在 Maxwell 2D 中建立 PMSM 电机几何模型（定子、转子、永磁体、气隙）。",
+            "description": "在 Maxwell 2D 中建立简化 PMSM 电机几何模型（定子、转子、永磁体、气隙）；不会伪装成已完成运动带和磁化方向设置。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -256,10 +258,12 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
                     "solver_type": {"type": "string", "enum": ["Transient", "Magnetostatic", "EddyCurrent"], "description": "求解器类型"},
                     "stop_time": {"type": "number", "description": "仿真结束时间（秒，瞬态专用）"},
                     "time_step": {"type": "number", "description": "时间步长（秒，瞬态专用）"},
                     "num_passes": {"type": "integer", "description": "自适应网格剖分最大迭代次数"},
+                    "frequency_Hz": {"type": "number", "description": "涡流求解频率（Hz，EddyCurrent 专用）"},
                 },
             },
         },
@@ -301,6 +305,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "phase_name": {"type": "string", "description": "相名称，如 PhaseA"},
                     "setup_name": {"type": "string"},
+                    "sweep_name": {"type": "string", "description": "扫描/时间步名称，如 LastAdaptive"},
                 },
             },
         },
@@ -328,6 +333,7 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "setup_name": {"type": "string"},
+                    "sweep_name": {"type": "string", "description": "扫描/时间步名称，如 LastAdaptive"},
                 },
             },
         },
@@ -393,6 +399,7 @@ TOOL_DEFINITIONS = [
                     "lower_bound": {"type": "number", "description": "下限"},
                     "upper_bound": {"type": "number", "description": "上限"},
                     "initial_value": {"type": "number", "description": "初始值"},
+                    "reference_value": {"type": "number", "description": "参考值；留空则跟随 initial_value"},
                 },
                 "required": ["name", "lower_bound", "upper_bound"],
             },
@@ -531,7 +538,13 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "connect_circuit",
             "description": "连接到 Maxwell Circuit Editor。",
-            "parameters": {"type": "object", "properties": {"version": {"type": "string"}}},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string"},
+                    "non_graphical": {"type": "boolean", "description": "是否无界面运行（批处理模式）"},
+                },
+            },
         },
     },
     {
@@ -610,6 +623,7 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "maxwell_project_path": {"type": "string", "description": "Maxwell 项目路径（.aedt）"},
+                    "design_name": {"type": "string", "description": "Maxwell 设计名称；留空则使用导入对象默认设计"},
                     "setup_name": {"type": "string"},
                 },
                 "required": ["maxwell_project_path"],
@@ -626,6 +640,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "num_modes": {"type": "integer", "description": "提取模态阶数"},
                     "freq_range_hz": {"type": "array", "items": {"type": "number"}, "description": "[f_min, f_max] Hz"},
+                    "analysis_name": {"type": "string", "description": "Mechanical 中的目标分析名称，默认 Modal"},
                 },
             },
         },
@@ -641,6 +656,7 @@ TOOL_DEFINITIONS = [
                     "freq_range_hz": {"type": "array", "items": {"type": "number"}, "description": "[f_min, f_max] Hz"},
                     "num_steps": {"type": "integer"},
                     "damping_ratio": {"type": "number"},
+                    "analysis_name": {"type": "string", "description": "Mechanical 中的目标分析名称，默认 Harmonic Response"},
                 },
             },
         },
@@ -650,7 +666,12 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "get_vibration_results",
             "description": "获取固有频率列表和振动结果。",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "analysis_name": {"type": "string", "description": "Mechanical 中的分析名称；留空则使用第一个分析"},
+                },
+            },
         },
     },
     # -----------------------------------------------------------------------
@@ -823,6 +844,7 @@ TOOL_DEFINITIONS = [
                     },
                     "energy_on": {"type": "boolean", "description": "是否开启能量方程（温度计算），默认 false"},
                     "turbulence_intensity": {"type": "number", "description": "湍流强度（0~1），默认 0.05（5%）"},
+                    "turbulent_length_scale": {"type": "number", "description": "湍流长度尺度（m）；留空则自动估算"},
                 },
             },
         },
@@ -838,7 +860,7 @@ TOOL_DEFINITIONS = [
                     "boundary_name": {"type": "string", "description": "边界名称，与网格定义一致，如 'inlet'、'outlet'"},
                     "bc_type": {
                         "type": "string",
-                        "enum": ["velocity-inlet", "pressure-inlet", "pressure-outlet", "wall", "symmetry"],
+                        "enum": ["velocity-inlet", "pressure-inlet", "pressure-outlet", "wall"],
                         "description": "边界类型",
                     },
                     "velocity_magnitude": {"type": "number", "description": "速度大小（m/s），velocity-inlet 必填"},
@@ -1194,6 +1216,11 @@ TOOL_DEFINITIONS = [
                     "convergence_temp_delta": {"type": "number", "description": "收敛判据：相邻两轮最高温度差（°C），默认 1.0"},
                     "maxwell_setup_name": {"type": "string", "description": "Maxwell 求解设置名称，默认 Setup1"},
                     "icepak_setup_name": {"type": "string", "description": "Icepak 求解设置名称，默认 SetupThermal"},
+                    "feedback_mode": {
+                        "type": "string",
+                        "enum": ["one_way", "two_way"],
+                        "description": "耦合模式：one_way 为单向热迭代；two_way 为严格双向温度反馈",
+                    },
                 },
             },
         },
@@ -1601,7 +1628,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "run_thermal_stress_analysis",
-            "description": "将热仿真（Icepak/Motor-CAD）输出的温度分布导入 MAPDL，计算热应力和热变形。",
+            "description": "基于近似均匀温度载荷执行 MAPDL 热应力分析；若 CSV 含非均匀温度分布则拒绝伪装成已完成映射。",
             "parameters": {
                 "type": "object",
                 "properties": {

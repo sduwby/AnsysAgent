@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from tools.utils import _ok, _err
+from tools.utils import _ok, _err, ensure_parent_dir, get_design_names, ok_message
 
 
 def _app():
@@ -16,7 +16,6 @@ def _app():
     if maxwell_tools._aedt_app is None:
         raise RuntimeError("未连接到 AEDT，请先调用 connect_aedt。")
     return maxwell_tools._aedt_app
-
 
 # ---------------------------------------------------------------------------
 # 工具：save_project - 保存项目
@@ -34,14 +33,12 @@ def save_project(file_path: str = "") -> dict:
         if file_path:
             if not file_path.endswith(".aedt"):
                 file_path += ".aedt"
-            parent = os.path.dirname(os.path.abspath(file_path))
-            if parent:
-                os.makedirs(parent, exist_ok=True)
+            ensure_parent_dir(file_path)
             app.save_project(file_name=file_path)
-            return _ok(f"项目已另存为: {file_path}")
+            return _ok(ok_message(f"项目已另存为: {file_path}", file_path=file_path))
         else:
             app.save_project()
-            return _ok(f"项目已保存: {app.project_file}")
+            return _ok(ok_message(f"项目已保存: {app.project_file}", file_path=app.project_file))
     except Exception as e:
         return _err(str(e))
 
@@ -67,7 +64,7 @@ def open_project(file_path: str) -> dict:
         project_name = os.path.splitext(os.path.basename(file_path))[0]
         return _ok(
             f"已在当前 AEDT 会话中打开项目 '{project_name}'。"
-            "如需切换到该项目中的设计，请重新调用 connect_aedt 并指定设计名。"
+            "如需切换到该项目中的特定设计，请重新调用 connect_aedt，传入 project_path 和 design_name。"
         )
     except Exception as e:
         return _err(str(e))
@@ -91,7 +88,7 @@ def close_project(project_name: str = "", save_first: bool = True) -> dict:
         if save_first:
             app.save_project()
         app.close_project(name)
-        return _ok(f"已关闭项目: {name}")
+        return _ok(ok_message(f"已关闭项目: {name}", project_name=name))
     except Exception as e:
         return _err(str(e))
 
@@ -106,7 +103,7 @@ def list_designs() -> dict:
     """
     try:
         app = _app()
-        designs = app.design_list()
+        designs = get_design_names(app)
         return _ok({
             "project_name": app.project_name,
             "project_file": app.project_file,
@@ -132,16 +129,26 @@ def copy_design(source_design: str, new_name: str) -> dict:
     """
     try:
         app = _app()
+        existing_designs = get_design_names(app)
+        if source_design not in existing_designs:
+            return _err(f"源设计不存在: {source_design}")
+        if new_name in existing_designs:
+            return _err(f"目标设计名已存在: {new_name}")
+
         # PyAEDT 通过 oproject COM 接口复制设计
         app.oproject.CopyDesign(source_design)
         app.oproject.PasteDesign(0)  # 粘贴为新设计
-        # 重命名：找到最新出现的重复设计名并改名
-        designs_after = app.design_list()
-        duplicates = [d for d in designs_after if d.startswith(source_design)]
-        if len(duplicates) >= 2:
-            # 最后一个是刚粘贴的副本
-            copy_name = sorted(duplicates)[-1]
-            app.oproject.RenameDesign(copy_name, new_name)
-        return _ok(f"设计 '{source_design}' 已复制为 '{new_name}'")
+        designs_after = get_design_names(app)
+        new_design_candidates = [d for d in designs_after if d not in existing_designs]
+        if len(new_design_candidates) != 1:
+            return _err(
+                "复制设计后未能唯一识别新设计，请检查 AEDT 当前设计列表后手动重命名"
+            )
+        app.oproject.RenameDesign(new_design_candidates[0], new_name)
+        return _ok(ok_message(
+            f"设计 '{source_design}' 已复制为 '{new_name}'",
+            source_design=source_design,
+            new_name=new_name,
+        ))
     except Exception as e:
         return _err(str(e))
