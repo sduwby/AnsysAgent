@@ -30,6 +30,11 @@ a = Analysis(
         (".env", "."),
         # .env.example 供用户参考
         (".env.example", "."),
+        # 内置 API 速查表文档（开箱即用，只读）
+        ("docs/api", "docs/api"),
+        # 内置官方知识库（开箱即用，只读）
+        # 用户自定义知识请放在 exe 同级的 knowledge/ 目录
+        ("knowledge", "knowledge"),
     ],
     hiddenimports=[
         "agent.chat_agent",

@@ -184,6 +184,18 @@ build.bat
 # 输出：dist\ansys-agent.exe
 ```
 
+打包时会自动将 `docs/api/` 和 `knowledge/` 目录内置到 exe 中，无需额外分发知识文件。
+
+### 打包版知识库扩展
+
+| 目录位置 | 说明 |
+|---------|------|
+| exe 内置（只读）| 打包时固化的 `docs/api` 和 `knowledge/official` 文件，随 exe 分发 |
+| `<exe所在目录>/knowledge/official/` | 用户可在此放置额外的官方文档 |
+| `<exe所在目录>/knowledge/internal/` | 用户自定义经验文档、内部知识 |
+
+添加新文件后，删除 `.rag/keyword_index.json` 并重启 agent 即可触发重建，内置知识与自定义知识将同时生效。
+
 ## 目录结构
 
 ```
