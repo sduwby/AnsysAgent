@@ -198,6 +198,8 @@ class DummyPost:
 
     def export_report_to_file(self, report_name, output_path):
         self.exported.append((report_name, output_path))
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("value\n1\n")
 
 
 class DummyCircuitComponent:
@@ -235,6 +237,7 @@ class DummyVisualizationPost:
     def __init__(self):
         self.oModule = types.SimpleNamespace(FitAll=lambda: None)
         self.exports = []
+        self.field_plots = {"Plot1": types.SimpleNamespace(quantityname="B")}
 
     def SetActiveVariation(self, name, value):
         return None
@@ -248,6 +251,7 @@ class DummyVisualizationPost:
 class DummyVisualizationApp:
     def __init__(self):
         self.post = DummyVisualizationPost()
+        self.modeler = DummyMaxwellModeler({"Rotor", "Stator"})
 
 
 class DummyReportExportPost:
@@ -258,6 +262,8 @@ class DummyReportExportPost:
 
     def export_report_to_file(self, name, path):
         self.csv_exports.append((name, path))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("x,y\n1,2\n")
 
     def export_report_to_jpg(self, name, path):
         raise RuntimeError("jpg unsupported")
@@ -288,13 +294,24 @@ class DummyMaxwellModeler:
             name: types.SimpleNamespace(name=name)
             for name in self.existing_objects
         }
+        self.circles = []
+        self.polylines = []
+        self.object_names = list(self.existing_objects)
 
     def get_object_from_name(self, name):
         return self.objects.get(name)
 
     def create_circle(self, position=None, radius=None, num_sides=None, name=None, material=None):
+        self.circles.append({
+            "position": position,
+            "radius": radius,
+            "num_sides": num_sides,
+            "name": name,
+            "material": material,
+        })
         self.existing_objects.add(name)
         self.objects.setdefault(name, types.SimpleNamespace(name=name))
+        self.object_names = list(self.existing_objects)
 
     def subtract(self, blank, tool, keep_originals=False):
         if not keep_originals:
@@ -305,8 +322,15 @@ class DummyMaxwellModeler:
         return None
 
     def create_polyline(self, position_list=None, cover_surface=None, name=None, matname=None):
+        self.polylines.append({
+            "position_list": position_list,
+            "cover_surface": cover_surface,
+            "name": name,
+            "matname": matname,
+        })
         self.existing_objects.add(name)
         self.objects.setdefault(name, types.SimpleNamespace(name=name))
+        self.object_names = list(self.existing_objects)
 
 
 class RegressionTests(unittest.TestCase):
@@ -322,12 +346,47 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(cfg.provider, "openai")
         self.assertEqual(cfg.api_key, "provider-key")
 
+    def test_load_llm_config_uses_builtin_gemini_key_when_env_missing(self):
+        env = {
+            "LLM_PROVIDER": "gemini",
+            "LLM_API_KEY": "",
+            "LLM_MODEL": "",
+            "LLM_API_KEY_GEMINI": "",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            cfg = config_manager.load_llm_config()
+        self.assertEqual(cfg.provider, "gemini")
+        self.assertEqual(cfg.api_key, "AIzaSyCKqwy6JrrhnPq0tGRvvfiQLN1MTbQsgqo")
+
     def test_list_designs_accepts_design_list_property(self):
         app = DummyProjectApp(["Design1", "Design2"])
         with patch("tools.project_tools._app", return_value=app):
             result = project_tools.list_designs()
         self.assertTrue(result["success"])
         self.assertEqual(result["result"]["count"], 2)
+
+    def test_open_project_rejects_non_aedt_file(self):
+        result = project_tools.open_project("/tmp/demo.txt")
+        self.assertFalse(result["success"])
+        self.assertIn(".aedt 项目文件", result["error"])
+
+    def test_open_project_surfaces_reconnect_warning_when_context_not_switched(self):
+        path = "/tmp/open_project_demo.aedt"
+        Path(path).write_text("", encoding="utf-8")
+
+        class _DummyDesktop:
+            def OpenProject(self, file_path):
+                self.opened = file_path
+
+        app = types.SimpleNamespace(
+            odesktop=_DummyDesktop(),
+            project_file="/tmp/old_project.aedt",
+        )
+        with patch("tools.project_tools._app", return_value=app):
+            result = project_tools.open_project(path)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["result"]["reconnect_recommended"])
+        self.assertIn("warnings", result["result"])
 
     def test_get_design_names_accepts_design_list_method(self):
         app = DummyProjectAppMethod(["DesignA", "DesignB"])
@@ -441,6 +500,18 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("与当前结果提取不匹配", result["error"])
 
+    def test_get_torque_rejects_known_unsolved_setup(self):
+        data = DummyReportData({"Moving1.Torque": [1.0]}, sweep_values=[0.0])
+        post = DummyPost(data, reports=["TorqueReport"])
+        app = types.SimpleNamespace(post=post, solution_type="Transient")
+        state = maxwell_tools._get_model_state(app)
+        state["motion_configured"] = True
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": False}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_torque()
+        self.assertFalse(result["success"])
+        self.assertIn("尚未完成求解", result["error"])
+
     def test_create_inverter_circuit_fails_if_all_wires_fail(self):
         app = DummyCircuitApp(fail_wires=True)
         with patch("tools.circuit_tools._app", return_value=app):
@@ -520,6 +591,7 @@ class RegressionTests(unittest.TestCase):
                 self.modeler = DummyMaxwellModeler()
                 self.motion_calls = 0
                 self.magnetization_calls = 0
+                self.variable_manager = DummyVariableManager()
                 self.odesign = types.SimpleNamespace(SetDesignSettings=lambda settings: None)
 
             def change_design_settings(self, settings):
@@ -546,6 +618,42 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(result["result"]["magnetization_configured"])
         self.assertTrue(result["result"]["motion_configured"])
         self.assertTrue(result["result"]["torque_ready"])
+
+    def test_create_motor_geometry_binds_continuous_dimensions_to_design_variables(self):
+        class _DummyApp:
+            def __init__(self):
+                self.modeler = DummyMaxwellModeler()
+                self.variable_manager = DummyVariableManager()
+                self.odesign = types.SimpleNamespace(SetDesignSettings=lambda settings: None)
+
+            def change_design_settings(self, settings):
+                return None
+
+            def assign_magnetization(self, assignment=None, direction=None):
+                return None
+
+            def assign_rotate_motion(self, **kwargs):
+                return None
+
+        app = _DummyApp()
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.create_motor_geometry(
+                stator_outer_radius=60.0,
+                stator_inner_radius=40.0,
+                rotor_outer_radius=35.0,
+                rotor_inner_radius=10.0,
+                num_slots=12,
+                num_poles=8,
+                magnet_thickness=2.0,
+                stack_length=50.0,
+            )
+        self.assertTrue(result["success"])
+        self.assertEqual(app.variable_manager.updated["stator_outer_radius"], "60.0mm")
+        self.assertEqual(app.variable_manager.updated["stack_length"], "50.0mm")
+        self.assertEqual(app.modeler.circles[0]["radius"], "stator_outer_radius")
+        self.assertTrue(result["result"]["parametric_geometry_ready"])
+        self.assertTrue(result["result"]["topology_locked"])
+        self.assertIn("stator_outer_radius", result["result"]["geometry_design_variables"])
 
     def test_setup_winding_assigns_coils_per_conductor(self):
         calls = {"coils": [], "winding": None}
@@ -607,6 +715,41 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["result"]["conductor_names"], ["Conductor_1", "Conductor_4", "Conductor_7", "Conductor_10"])
         self.assertIn("warnings", result["result"])
+        self.assertEqual(result["result"]["grouping_strategy"], "three_phase_equal_spacing")
+
+    def test_setup_winding_manual_only_requires_explicit_conductors(self):
+        app = types.SimpleNamespace(
+            modeler=DummyMaxwellModeler({"Conductor_1", "Conductor_4"}),
+            assign_coil=lambda **kwargs: types.SimpleNamespace(name="Coil_1"),
+            assign_winding=lambda **kwargs: None,
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["geometry"] = {"num_slots": 12}
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.setup_winding(
+                "PhaseA",
+                5.0,
+                None,
+                grouping_strategy="manual_only",
+            )
+        self.assertFalse(result["success"])
+        self.assertIn("conductor_names 不能为空", result["error"])
+
+    def test_setup_winding_rejects_unknown_grouping_strategy(self):
+        app = types.SimpleNamespace(
+            modeler=DummyMaxwellModeler({"Conductor_1"}),
+            assign_coil=lambda **kwargs: types.SimpleNamespace(name="Coil_1"),
+            assign_winding=lambda **kwargs: None,
+        )
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.setup_winding(
+                "PhaseA",
+                5.0,
+                None,
+                grouping_strategy="custom_strategy",
+            )
+        self.assertFalse(result["success"])
+        self.assertIn("未知 grouping_strategy", result["error"])
 
     def test_setup_winding_inference_fails_without_compatible_geometry(self):
         app = types.SimpleNamespace(
@@ -708,11 +851,28 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("不支持 PDF 导出", result["error"])
 
+    def test_export_report_rejects_empty_report(self):
+        dynamic_reporting_tools._report_session = {
+            "type": "html",
+            "title": "Demo",
+            "output_dir": "/tmp",
+            "sections": [],
+        }
+        dynamic_reporting_tools._report_items = []
+        result = dynamic_reporting_tools.export_report(format="html", filename="empty_report")
+        self.assertFalse(result["success"])
+        self.assertIn("当前报告内容为空", result["error"])
+
     def test_create_report_session_surfaces_fallback_warning(self):
         sys.modules.pop("ansys.dynamicreporting.core", None)
         result = dynamic_reporting_tools.create_report_session(use_adr=True)
         self.assertTrue(result["success"])
         self.assertIn("warnings", result["result"])
+
+    def test_create_report_session_rejects_empty_title(self):
+        result = dynamic_reporting_tools.create_report_session(title="   ", use_adr=False)
+        self.assertFalse(result["success"])
+        self.assertIn("title 不能为空", result["error"])
 
     def test_add_report_section_returns_structured_result(self):
         dynamic_reporting_tools._report_session = {
@@ -726,11 +886,32 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["result"]["type"], "section")
 
+    def test_add_report_section_rejects_empty_content(self):
+        dynamic_reporting_tools._report_session = {
+            "type": "html",
+            "title": "Demo",
+            "output_dir": "/tmp",
+            "sections": [],
+        }
+        dynamic_reporting_tools._report_items = []
+        result = dynamic_reporting_tools.add_report_section("Intro", "   ")
+        self.assertFalse(result["success"])
+        self.assertIn("content 不能为空", result["error"])
+
     def test_generate_report_returns_structured_result(self):
         output_path = "/tmp/generated_motor_report"
-        result = report_tools.generate_report(output_path=output_path, format="html")
+        result = report_tools.generate_report(
+            output_path=output_path,
+            format="html",
+            results={"torque": {"avg_torque_Nm": 1.2}},
+        )
         self.assertTrue(result["success"])
         self.assertTrue(result["result"]["output_path"].endswith(".html"))
+
+    def test_generate_report_rejects_empty_results(self):
+        result = report_tools.generate_report(output_path="/tmp/empty_report", format="html", results={})
+        self.assertFalse(result["success"])
+        self.assertIn("results 不能为空", result["error"])
 
     def test_set_motorcad_geometry_rejects_invalid_dimensions(self):
         result = motorcad_tools.set_motorcad_geometry(
@@ -854,6 +1035,16 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertIn("warnings", result["result"])
 
+    def test_export_aedt_report_fails_when_no_reports_exported(self):
+        app = types.SimpleNamespace(post=types.SimpleNamespace(
+            all_report_names=[],
+            export_report_to_file=lambda name, path: None,
+            export_report_to_jpg=lambda name, path: None,
+        ))
+        result = report_tools.export_aedt_report(output_dir="/tmp/report-empty", aedt_app=app)
+        self.assertFalse(result["success"])
+        self.assertIn("未成功导出任何报告", result["error"])
+
     def test_connect_circuit_returns_structured_result(self):
         circuit_mod = types.ModuleType("ansys.aedt.core")
 
@@ -907,6 +1098,91 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("step 不能为 0", result["error"])
 
+    def test_create_parametric_sweep_rejects_unknown_variable(self):
+        app = types.SimpleNamespace(
+            variable_manager=DummyVariableManager({"known_gap": "1.0mm"}),
+            existing_analysis_setups=["Setup1"],
+        )
+        with patch("tools.sweep_tools._app", return_value=app):
+            result = sweep_tools.create_parametric_sweep("gap", 1.0, 2.0, 0.5)
+        self.assertFalse(result["success"])
+        self.assertIn("参数变量不存在", result["error"])
+
+    def test_create_parametric_sweep_records_metadata_and_defaults_expressions(self):
+        class _DummySweep:
+            name = "Sweep1"
+
+            def __init__(self):
+                self.calculations = None
+
+            def add_calculation(self, setup_name, sweep_name, expressions):
+                self.calculations = (setup_name, sweep_name, expressions)
+
+            def update(self):
+                return None
+
+        class _DummyParametrics:
+            def __init__(self):
+                self.last_sweep = None
+
+            def add(self, **kwargs):
+                self.last_sweep = _DummySweep()
+                return self.last_sweep
+
+        app = types.SimpleNamespace(
+            variable_manager=DummyVariableManager({"gap": "1.0mm"}),
+            existing_analysis_setups=["Setup1"],
+            parametrics=_DummyParametrics(),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["motion_configured"] = True
+        state["winding_defined"] = True
+        state["setups"] = {"Setup1": {"solver_type": "Transient"}}
+        with patch("tools.sweep_tools._app", return_value=app):
+            result = sweep_tools.create_parametric_sweep("gap", 1.0, 2.0, 0.5)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["result"]["result_expressions"], ["Moving1.Torque", "CoreLoss", "OhmicLoss"])
+        self.assertEqual(state["parametric_sweeps"]["Sweep1"]["result_expressions"], ["Moving1.Torque", "CoreLoss", "OhmicLoss"])
+        self.assertFalse(state["parametric_sweeps"]["Sweep1"]["analyzed"])
+
+    def test_get_sweep_results_rejects_unanalyzed_registered_sweep(self):
+        class _DummyPost:
+            def get_solution_data(self, expressions=None, setup_sweep_name=None, primary_sweep_variable=None):
+                return DummySweepSolutionData({"Moving1.Torque": [1.0]}, primary_sweep_values=[1.0])
+
+        app = types.SimpleNamespace(post=_DummyPost())
+        state = maxwell_tools._get_model_state(app)
+        state["parametric_sweeps"] = {
+            "Sweep1": {
+                "param_names": ["gap"],
+                "result_expressions": ["Moving1.Torque"],
+                "analyzed": False,
+            }
+        }
+        with patch("tools.sweep_tools._app", return_value=app):
+            result = sweep_tools.get_sweep_results("gap", "Torque", "Sweep1")
+        self.assertFalse(result["success"])
+        self.assertIn("尚未执行", result["error"])
+
+    def test_get_sweep_results_rejects_expression_not_in_registered_sweep(self):
+        class _DummyPost:
+            def get_solution_data(self, expressions=None, setup_sweep_name=None, primary_sweep_variable=None):
+                return DummySweepSolutionData({"Moving1.Torque": [1.0]}, primary_sweep_values=[1.0])
+
+        app = types.SimpleNamespace(post=_DummyPost())
+        state = maxwell_tools._get_model_state(app)
+        state["parametric_sweeps"] = {
+            "Sweep1": {
+                "param_names": ["gap"],
+                "result_expressions": ["CoreLoss"],
+                "analyzed": True,
+            }
+        }
+        with patch("tools.sweep_tools._app", return_value=app):
+            result = sweep_tools.get_sweep_results("gap", "Torque", "Sweep1")
+        self.assertFalse(result["success"])
+        self.assertIn("未配置结果表达式", result["error"])
+
     def test_get_sweep_results_maps_torque_to_moving1_torque(self):
         captured = {}
 
@@ -927,6 +1203,22 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(captured["expressions"], ["Moving1.Torque"])
         self.assertEqual(result["result"]["queried_expression"], "Moving1.Torque")
 
+    def test_export_results_fails_when_export_does_not_create_file(self):
+        class _DummyPost:
+            all_report_names = ["TorqueReport"]
+
+            def export_report_to_file(self, report_name, output_path):
+                return None
+
+        app = types.SimpleNamespace(post=_DummyPost())
+        output_path = "/tmp/missing_export.csv"
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.export_results(output_path=output_path, result_type="torque")
+        self.assertFalse(result["success"])
+        self.assertIn("未生成文件", result["error"])
+
     def test_get_efficiency_map_parses_values_with_units(self):
         variations = [
             {
@@ -945,6 +1237,170 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["result"]["num_operating_points"], 1)
         self.assertEqual(result["result"]["skipped_points"], 0)
+
+    def test_get_efficiency_map_rejects_unanalyzed_registered_2d_sweep(self):
+        app = types.SimpleNamespace(parametrics=types.SimpleNamespace(
+            get_variation_values=lambda setup_name=None, sweep_name=None: []
+        ))
+        state = maxwell_tools._get_model_state(app)
+        state["parametric_sweeps"] = {
+            "MapSweep": {
+                "type": "2d",
+                "param_names": ["Speed", "Current"],
+                "result_expressions": ["Moving1.Torque", "CoreLoss", "OhmicLoss"],
+                "analyzed": False,
+            }
+        }
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_efficiency_map(sweep_name="MapSweep")
+        self.assertFalse(result["success"])
+        self.assertIn("尚未执行", result["error"])
+
+    def test_get_efficiency_map_rejects_non_2d_registered_sweep(self):
+        app = types.SimpleNamespace(parametrics=types.SimpleNamespace(
+            get_variation_values=lambda setup_name=None, sweep_name=None: []
+        ))
+        state = maxwell_tools._get_model_state(app)
+        state["parametric_sweeps"] = {
+            "Sweep1": {
+                "type": "1d",
+                "param_names": ["Speed"],
+                "result_expressions": ["Moving1.Torque", "CoreLoss", "OhmicLoss"],
+                "analyzed": True,
+            }
+        }
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_efficiency_map(sweep_name="Sweep1")
+        self.assertFalse(result["success"])
+        self.assertIn("不是二维扫描", result["error"])
+
+    def test_get_efficiency_map_rejects_registered_sweep_with_wrong_parameters(self):
+        app = types.SimpleNamespace(parametrics=types.SimpleNamespace(
+            get_variation_values=lambda setup_name=None, sweep_name=None: []
+        ))
+        state = maxwell_tools._get_model_state(app)
+        state["parametric_sweeps"] = {
+            "MapSweep": {
+                "type": "2d",
+                "param_names": ["Speed", "TorqueCmd"],
+                "result_expressions": ["Moving1.Torque", "CoreLoss", "OhmicLoss"],
+                "analyzed": True,
+            }
+        }
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_efficiency_map(sweep_name="MapSweep")
+        self.assertFalse(result["success"])
+        self.assertIn("不包含 speed/current 参数组合", result["error"])
+
+    def test_get_efficiency_map_skips_points_with_missing_required_fields(self):
+        variations = [
+            {
+                "Speed": "3000rpm",
+                "Current": "10A",
+                "Moving1.Torque": "5.5NewtonMeter",
+                "CoreLoss": "20W",
+                "OhmicLoss": "30W",
+            },
+            {
+                "Speed": "3500rpm",
+                "Current": "12A",
+                "CoreLoss": "22W",
+                "OhmicLoss": "35W",
+            },
+        ]
+        app = types.SimpleNamespace(parametrics=types.SimpleNamespace(
+            get_variation_values=lambda setup_name=None, sweep_name=None: variations
+        ))
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_efficiency_map()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["result"]["num_operating_points"], 1)
+        self.assertEqual(result["result"]["skipped_points"], 1)
+
+    def test_check_demagnetization_rejects_unsolved_setup(self):
+        app = types.SimpleNamespace(
+            post=types.SimpleNamespace(get_scalar_field_value=lambda *args, **kwargs: 1.0),
+            modeler=DummyMaxwellModeler({"Magnet_1"}),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": False}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.check_demagnetization()
+        self.assertFalse(result["success"])
+        self.assertIn("尚未完成求解", result["error"])
+
+    def test_check_demagnetization_fails_when_all_magnet_queries_fail(self):
+        class _DummyPost:
+            def get_scalar_field_value(self, *args, **kwargs):
+                raise RuntimeError("field unavailable")
+
+        app = types.SimpleNamespace(
+            post=_DummyPost(),
+            modeler=DummyMaxwellModeler({"Magnet_1"}),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": True}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.check_demagnetization()
+        self.assertFalse(result["success"])
+        self.assertIn("未能成功提取任何永磁体", result["error"])
+
+    def test_check_demagnetization_surfaces_failed_magnets_in_warning(self):
+        class _DummyPost:
+            def get_scalar_field_value(self, field, operation, object_name=None, setup_sweep_name=None):
+                if object_name == "Magnet_2":
+                    raise RuntimeError("missing field")
+                if field == "Mag_B":
+                    return 0.8
+                return 100000.0
+
+        app = types.SimpleNamespace(
+            post=_DummyPost(),
+            modeler=DummyMaxwellModeler({"Magnet_1", "Magnet_2"}),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": True}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.check_demagnetization()
+        self.assertTrue(result["success"])
+        self.assertFalse(result["result"]["overall_safe"])
+        self.assertEqual(result["result"]["evaluated_magnets"], ["Magnet_1"])
+        self.assertEqual(result["result"]["failed_magnets"], ["Magnet_2"])
+        self.assertIn("warnings", result["result"])
+
+    def test_check_demagnetization_rejects_invalid_safety_margin(self):
+        app = types.SimpleNamespace(
+            post=types.SimpleNamespace(get_scalar_field_value=lambda *args, **kwargs: 1.0),
+            modeler=DummyMaxwellModeler({"Magnet_1"}),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": True}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.check_demagnetization(safety_margin=1.5)
+        self.assertFalse(result["success"])
+        self.assertIn("safety_margin 必须在 0 到 1 之间", result["error"])
+
+    def test_get_flux_density_rejects_unsolved_setup(self):
+        app = types.SimpleNamespace(
+            post=types.SimpleNamespace(evaluate_expression=lambda **kwargs: 1.0),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": False}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_flux_density()
+        self.assertFalse(result["success"])
+        self.assertIn("尚未完成求解", result["error"])
+
+    def test_get_flux_density_rejects_invalid_point_dimension(self):
+        app = types.SimpleNamespace(
+            post=types.SimpleNamespace(evaluate_expression=lambda **kwargs: 1.0),
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": True}}
+        with patch("tools.result_tools._app", return_value=app):
+            result = result_tools.get_flux_density(point=[0, 0])
+        self.assertFalse(result["success"])
+        self.assertIn("长度为 3", result["error"])
 
     def test_get_inductance_marks_dq_values_as_approximate(self):
         data = DummyReportData(
@@ -1003,6 +1459,76 @@ class RegressionTests(unittest.TestCase):
             sys.modules.pop("ansys", None)
         self.assertTrue(result["success"])
         self.assertIn("warnings", result["result"])
+        self.assertFalse(result["result"]["binding_verified"])
+
+    def test_add_design_variable_validates_binding_against_current_maxwell_design(self):
+        class _DummyParameter:
+            def __init__(self, **kwargs):
+                self.name = kwargs["name"]
+                self.reference_value = kwargs["reference_value"]
+                self.lower_bound = kwargs["lower_bound"]
+                self.upper_bound = kwargs["upper_bound"]
+
+        class _DummyParameterManager:
+            def add_parameter(self, param):
+                self.param = param
+
+        root_system = types.SimpleNamespace(parameter_manager=_DummyParameterManager())
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(root_system=root_system)))
+        maxwell_app = types.SimpleNamespace(variable_manager=DummyVariableManager({"gap": "1.0mm"}))
+
+        project_parametric_mod = types.ModuleType("ansys.optislang.core.project_parametric")
+        project_parametric_mod.OptimizationParameter = _DummyParameter
+        sys.modules["ansys"] = types.ModuleType("ansys")
+        sys.modules["ansys.optislang"] = types.ModuleType("ansys.optislang")
+        sys.modules["ansys.optislang.core"] = types.ModuleType("ansys.optislang.core")
+        sys.modules["ansys.optislang.core.project_parametric"] = project_parametric_mod
+        try:
+            with patch("tools.optislang_tools._get_osl", return_value=osl), \
+                 patch("tools.maxwell_tools._app", return_value=maxwell_app):
+                from tools import optislang_tools
+                result = optislang_tools.add_design_variable("gap", 1.0, 2.0)
+        finally:
+            sys.modules.pop("ansys.optislang.core.project_parametric", None)
+            sys.modules.pop("ansys.optislang.core", None)
+            sys.modules.pop("ansys.optislang", None)
+            sys.modules.pop("ansys", None)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["result"]["binding_verified"])
+        self.assertEqual(result["result"]["binding_source"], "maxwell_design")
+
+    def test_add_design_variable_rejects_topology_parameter_for_locked_geometry(self):
+        class _DummyParameter:
+            def __init__(self, **kwargs):
+                self.name = kwargs["name"]
+
+        class _DummyParameterManager:
+            def add_parameter(self, param):
+                self.param = param
+
+        root_system = types.SimpleNamespace(parameter_manager=_DummyParameterManager())
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(root_system=root_system)))
+        maxwell_app = types.SimpleNamespace(variable_manager=DummyVariableManager())
+        maxwell_tools._get_model_state(maxwell_app)["geometry"] = {"topology_locked": True}
+
+        project_parametric_mod = types.ModuleType("ansys.optislang.core.project_parametric")
+        project_parametric_mod.OptimizationParameter = _DummyParameter
+        sys.modules["ansys"] = types.ModuleType("ansys")
+        sys.modules["ansys.optislang"] = types.ModuleType("ansys.optislang")
+        sys.modules["ansys.optislang.core"] = types.ModuleType("ansys.optislang.core")
+        sys.modules["ansys.optislang.core.project_parametric"] = project_parametric_mod
+        try:
+            with patch("tools.optislang_tools._get_osl", return_value=osl), \
+                 patch("tools.maxwell_tools._app", return_value=maxwell_app):
+                from tools import optislang_tools
+                result = optislang_tools.add_design_variable("num_slots", 12, 18)
+        finally:
+            sys.modules.pop("ansys.optislang.core.project_parametric", None)
+            sys.modules.pop("ansys.optislang.core", None)
+            sys.modules.pop("ansys.optislang", None)
+            sys.modules.pop("ansys", None)
+        self.assertFalse(result["success"])
+        self.assertIn("拓扑参数", result["error"])
 
     def test_run_optimization_requires_variables_and_responses(self):
         from tools import optislang_tools
@@ -1017,11 +1543,24 @@ class RegressionTests(unittest.TestCase):
         from tools import optislang_tools
         optislang_tools._osl_config.clear()
         optislang_tools._osl_config["design_variables"] = {"gap"}
+        optislang_tools._osl_config["design_variable_bindings"] = {"gap": {"binding_verified": True}}
         osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(start=lambda: None)))
         with patch("tools.optislang_tools._get_osl", return_value=osl):
             result = optislang_tools.run_sensitivity_study()
         self.assertFalse(result["success"])
         self.assertIn("尚未配置任何响应", result["error"])
+
+    def test_run_optimization_rejects_unverified_design_variable_bindings(self):
+        from tools import optislang_tools
+        optislang_tools._osl_config.clear()
+        optislang_tools._osl_config["design_variables"] = {"gap"}
+        optislang_tools._osl_config["design_variable_bindings"] = {"gap": {"binding_verified": False}}
+        optislang_tools._osl_config["responses"] = {"torque"}
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(start=lambda: None)))
+        with patch("tools.optislang_tools._get_osl", return_value=osl):
+            result = optislang_tools.run_optimization()
+        self.assertFalse(result["success"])
+        self.assertIn("尚未验证与当前 Maxwell 参数绑定", result["error"])
 
     def test_get_optimization_results_marks_reference_design_fallback(self):
         class _DummyParam:
@@ -1038,18 +1577,81 @@ class RegressionTests(unittest.TestCase):
             parameters=[_DummyParam("gap", 1.2)],
             responses=[_DummyResponse("torque", 5.0)],
         )
+        from tools import optislang_tools
+        optislang_tools._osl_config["last_run_kind"] = "optimization"
+        optislang_tools._osl_config["last_run_context"] = {
+            "variables": ["gap"],
+            "responses": ["torque"],
+            "project_path": "/tmp/demo.opf",
+        }
         root_system = types.SimpleNamespace(
             get_reference_design=lambda: design,
             num_evaluations=12,
+            name="RootSystem",
         )
-        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(root_system=root_system)))
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(
+            root_system=root_system,
+            project_path="/tmp/demo.opf",
+        )))
         with patch("tools.optislang_tools._get_osl", return_value=osl):
-            from tools import optislang_tools
             result = optislang_tools.get_optimization_results()
         self.assertTrue(result["success"])
         self.assertEqual(result["result"]["result_source"], "get_reference_design")
         self.assertEqual(result["result"]["num_evaluations"], 12)
+        self.assertEqual(result["result"]["project_path"], "/tmp/demo.opf")
+        self.assertEqual(result["result"]["workflow_name"], "RootSystem")
         self.assertIn("warnings", result["result"])
+
+    def test_get_optimization_results_warns_on_context_mismatch(self):
+        class _DummyParam:
+            def __init__(self, name, value):
+                self.name = name
+                self.value = value
+
+        class _DummyResponse:
+            def __init__(self, name, value):
+                self.name = name
+                self.value = value
+
+        design = types.SimpleNamespace(
+            parameters=[_DummyParam("gap", 1.2)],
+            responses=[_DummyResponse("efficiency", 0.95)],
+        )
+        from tools import optislang_tools
+        optislang_tools._osl_config["last_run_kind"] = "sensitivity"
+        optislang_tools._osl_config["last_run_context"] = {
+            "variables": ["gap", "magnet_thickness"],
+            "responses": ["torque"],
+            "project_path": "/tmp/expected.opf",
+        }
+        root_system = types.SimpleNamespace(
+            get_best_design=lambda: design,
+            name="OptimizationSystem",
+        )
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(
+            root_system=root_system,
+            project_path="/tmp/actual.opf",
+        )))
+        with patch("tools.optislang_tools._get_osl", return_value=osl):
+            result = optislang_tools.get_optimization_results()
+        self.assertTrue(result["success"])
+        self.assertIn("warnings", result["result"])
+        warning_text = " | ".join(result["result"]["warnings"])
+        self.assertIn("最近一次记录的运行不是 optimization", warning_text)
+        self.assertIn("项目路径与最近一次优化运行记录不一致", warning_text)
+        self.assertIn("缺少已登记设计变量", warning_text)
+        self.assertIn("缺少已登记响应", warning_text)
+        self.assertIn("包含未登记响应", warning_text)
+
+    def test_get_optimization_results_rejects_empty_design_payload(self):
+        design = types.SimpleNamespace(parameters=[], responses=[])
+        root_system = types.SimpleNamespace(get_best_design=lambda: design)
+        osl = types.SimpleNamespace(application=types.SimpleNamespace(project=types.SimpleNamespace(root_system=root_system)))
+        with patch("tools.optislang_tools._get_osl", return_value=osl):
+            from tools import optislang_tools
+            result = optislang_tools.get_optimization_results()
+        self.assertFalse(result["success"])
+        self.assertIn("未读取到任何设计变量或响应值", result["error"])
 
     def test_run_simulation_rejects_missing_setup_name_when_list_available(self):
         app = types.SimpleNamespace(
@@ -1060,6 +1662,20 @@ class RegressionTests(unittest.TestCase):
             result = maxwell_tools.run_simulation("SetupB")
         self.assertFalse(result["success"])
         self.assertIn("求解设置不存在", result["error"])
+
+    def test_run_simulation_updates_solved_state(self):
+        app = types.SimpleNamespace(
+            existing_analysis_setups=["Setup1"],
+            analyze_setup=lambda name: None,
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": False}}
+        with patch("tools.maxwell_tools._app", return_value=app):
+            result = maxwell_tools.run_simulation("Setup1")
+        self.assertTrue(result["success"])
+        self.assertTrue(state["setups"]["Setup1"]["solved"])
+        self.assertIn("Setup1", state["solved_setups"])
+        self.assertEqual(state["last_solved_setup"], "Setup1")
 
     def test_connect_rmxprt_returns_structured_result(self):
         rmxprt_mod = types.ModuleType("ansys.aedt.core")
@@ -1166,6 +1782,8 @@ class RegressionTests(unittest.TestCase):
 
     def test_export_field_image_surfaces_unknown_orientation_warning(self):
         app = DummyVisualizationApp()
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": True}}
         output_path = "/tmp/field_plot_test.png"
         if os.path.exists(output_path):
             os.remove(output_path)
@@ -1177,6 +1795,49 @@ class RegressionTests(unittest.TestCase):
             )
         self.assertTrue(result["success"])
         self.assertIn("warnings", result["result"])
+
+    def test_export_field_image_rejects_missing_plot(self):
+        app = DummyVisualizationApp()
+        with patch("tools.visualization_tools._app", return_value=app):
+            result = visualization_tools.export_field_image(
+                plot_name="MissingPlot",
+                output_path="/tmp/missing_plot.png",
+            )
+        self.assertFalse(result["success"])
+        self.assertIn("场图 'MissingPlot' 不存在", result["error"])
+
+    def test_create_field_plot_rejects_unsolved_setup(self):
+        class _DummyPost:
+            def create_fieldplot_surface(self, **kwargs):
+                return object()
+
+        app = types.SimpleNamespace(
+            post=_DummyPost(),
+            modeler=DummyMaxwellModeler({"Rotor"}),
+            existing_analysis_setups=["Setup1"],
+        )
+        state = maxwell_tools._get_model_state(app)
+        state["setups"] = {"Setup1": {"solver_type": "Transient", "solved": False}}
+        with patch("tools.visualization_tools._app", return_value=app):
+            result = visualization_tools.create_field_plot(
+                quantity="B",
+                object_names=["Rotor"],
+            )
+        self.assertFalse(result["success"])
+        self.assertIn("尚未完成求解", result["error"])
+
+    def test_create_field_plot_rejects_unknown_quantity(self):
+        app = types.SimpleNamespace(
+            post=types.SimpleNamespace(create_fieldplot_surface=lambda **kwargs: object()),
+            modeler=DummyMaxwellModeler({"Rotor"}),
+        )
+        with patch("tools.visualization_tools._app", return_value=app):
+            result = visualization_tools.create_field_plot(
+                quantity="BadQuantity",
+                object_names=["Rotor"],
+            )
+        self.assertFalse(result["success"])
+        self.assertIn("未知场量名称", result["error"])
 
 
 if __name__ == "__main__":

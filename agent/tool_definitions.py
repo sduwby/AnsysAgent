@@ -196,7 +196,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_motor_geometry",
-            "description": "在 Maxwell 2D 中建立简化 PMSM 电机几何模型（定子、转子、永磁体、气隙）；不会伪装成已完成运动带和磁化方向设置。",
+            "description": "在 Maxwell 2D 中建立简化 PMSM 电机几何模型（定子、转子、永磁体、气隙）；连续尺寸会绑定为设计变量以支持扫描/优化，但 num_slots/num_poles 仍属于拓扑参数，修改后需重建几何。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -236,13 +236,18 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "setup_winding",
-            "description": "配置绕组相激励。",
+            "description": "配置绕组相激励；未显式提供导体列表时，默认按标准三相等间隔槽位自动分组，也可切换为仅手工分组。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phase_name": {"type": "string", "description": "相名称，如 PhaseA"},
                     "current_amplitude": {"type": "number", "description": "峰值电流（A）"},
-                    "conductor_names": {"type": "array", "items": {"type": "string"}, "description": "导体对象名称列表"},
+                    "conductor_names": {"type": "array", "items": {"type": "string"}, "description": "导体对象名称列表；留空时将按 grouping_strategy 决定是否自动推断"},
+                    "grouping_strategy": {
+                        "type": "string",
+                        "enum": ["three_phase_equal_spacing", "manual_only"],
+                        "description": "自动槽分组策略；默认 three_phase_equal_spacing，manual_only 表示必须显式提供 conductor_names",
+                    },
                     "frequency": {"type": "number", "description": "电频率（Hz），磁静态置 0"},
                     "phase_angle": {"type": "number", "description": "相位角（度）"},
                     "turns": {"type": "integer", "description": "绕组匝数，默认 1"},
@@ -394,11 +399,11 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_design_variable",
-            "description": "添加优化设计变量，设定取值范围。",
+            "description": "添加优化设计变量，设定取值范围；会尽量验证该变量已绑定到当前 Maxwell 设计，且不允许把 num_slots/num_poles 这类拓扑参数误当成连续变量。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "变量名（与 AEDT 参数名一致）"},
+                    "name": {"type": "string", "description": "变量名（需与当前 Maxwell 设计中已存在的连续参数一致）"},
                     "lower_bound": {"type": "number", "description": "下限"},
                     "upper_bound": {"type": "number", "description": "上限"},
                     "initial_value": {"type": "number", "description": "初始值"},
@@ -458,7 +463,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_optimization_results",
-            "description": "获取优化完成后的最优设计参数和目标值。",
+            "description": "获取优化完成后的最优设计参数和目标值，并尽量返回项目/工作流来源以及与最近一次优化上下文的一致性提示。",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -700,7 +705,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_parametric_sweep",
-            "description": "创建单参数线性扫描（start 到 stop，步长 step）。",
+            "description": "创建单参数线性扫描（start 到 stop，步长 step），并校验变量、setup 与结果表达式是否匹配当前模型状态。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -709,6 +714,7 @@ TOOL_DEFINITIONS = [
                     "stop": {"type": "number"},
                     "step": {"type": "number"},
                     "setup_name": {"type": "string"},
+                    "result_expressions": {"type": "array", "items": {"type": "string"}, "description": "扫描时要计算的结果表达式列表；留空则自动推断"},
                 },
                 "required": ["param_name", "start", "stop", "step"],
             },
@@ -745,7 +751,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_2d_sweep",
-            "description": "创建二维参数扫描（两个参数的笛卡尔积），适合效率 MAP。",
+            "description": "创建二维参数扫描（两个参数的笛卡尔积），适合效率 MAP，并校验变量、setup 与结果表达式是否匹配当前模型状态。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -754,6 +760,7 @@ TOOL_DEFINITIONS = [
                     "param2_name": {"type": "string"},
                     "param2_values": {"type": "array", "items": {"type": "number"}},
                     "setup_name": {"type": "string"},
+                    "result_expressions": {"type": "array", "items": {"type": "string"}, "description": "扫描时要计算的结果表达式列表；留空则自动推断"},
                 },
                 "required": ["param1_name", "param1_values", "param2_name", "param2_values"],
             },

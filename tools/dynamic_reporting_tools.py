@@ -35,6 +35,8 @@ def create_report_session(
     _report_items = []
     warnings: list[str] = []
     output_dir = output_dir or os.getcwd()
+    if not title.strip():
+        return _err("title 不能为空")
     os.makedirs(output_dir, exist_ok=True)
 
     if use_adr:
@@ -95,6 +97,10 @@ def add_report_section(
     """
     try:
         session = _check_session()
+        if not title.strip():
+            return _err("title 不能为空")
+        if not content.strip():
+            return _err("content 不能为空")
         if isinstance(session, dict) and session.get("type") == "html":
             session["sections"].append({
                 "type": "section",
@@ -137,6 +143,8 @@ def add_table_to_report(
         session = _check_session()
         if not data:
             return _err("data 不能为空列表")
+        if not all(isinstance(row, dict) for row in data):
+            return _err("data 必须为字典列表")
 
         if isinstance(session, dict) and session.get("type") == "html":
             session["sections"].append({
@@ -183,6 +191,8 @@ def add_image_to_report(
         session = _check_session()
         if not os.path.exists(image_path):
             return _err(f"图片文件不存在：{image_path}")
+        if width_pct <= 0 or width_pct > 100:
+            return _err("width_pct 必须在 1 到 100 之间")
 
         if isinstance(session, dict) and session.get("type") == "html":
             session["sections"].append({
@@ -224,12 +234,18 @@ def export_report(
     """
     try:
         session = _check_session()
+        if not filename.strip():
+            return _err("filename 不能为空")
 
         if isinstance(session, dict) and session.get("type") == "html":
             if format == "pdf":
                 return _err("内置 HTML 模板后端不支持 PDF 导出，请启用 ADR 或安装 PDF 渲染后端")
             if format != "html":
                 return _err(f"不支持的导出格式: {format}")
+        if not _report_items:
+            return _err("当前报告内容为空，请先添加节、表格或图片后再导出")
+
+        if isinstance(session, dict) and session.get("type") == "html":
             output_path = os.path.join(session["output_dir"], f"{filename}.html")
             _render_html_report(session, output_path)
         else:
@@ -241,6 +257,8 @@ def export_report(
                 session.renderer.render(output_path, format="pdf")
             else:
                 session.renderer.render(output_path)
+        if not os.path.exists(output_path):
+            return _err(f"报告导出后未生成文件: {output_path}")
 
         return _ok({
             "output_path": output_path,

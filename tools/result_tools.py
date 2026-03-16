@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 
 from tools.maxwell_tools import _app, _get_model_state
-from tools.utils import _ok, _err, create_report_and_get_data, ensure_parent_dir, ok_message
+from tools.utils import _ok, _err, append_warnings, create_report_and_get_data, ensure_parent_dir, ok_message
 
 
 def _report_category(app) -> str:
@@ -64,6 +65,18 @@ def _require_solver_type(app, setup_name: str, allowed_solver_types: set[str]) -
         )
 
 
+def _require_solved_setup(app, setup_name: str) -> None:
+    state = _get_model_state(app)
+    setup_info = state.get("setups", {}).get(setup_name)
+    if not setup_info:
+        return
+    if setup_info.get("solved") is False:
+        raise ValueError(
+            f"求解设置 '{setup_name}' 尚未完成求解；"
+            "请先调用 run_simulation 再提取结果"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 工具：get_torque - 提取转矩
 # ---------------------------------------------------------------------------
@@ -79,6 +92,7 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
         app = _app()
         _require_motor_state(app, needs_motion=True)
         _require_solver_type(app, setup_name, {"Transient", "Magnetostatic"})
+        _require_solved_setup(app, setup_name)
         data = create_report_and_get_data(
             app.post,
             expressions=["Moving1.Torque"],
@@ -112,6 +126,7 @@ def get_back_emf(
         app = _app()
         _require_motor_state(app, needs_winding=True)
         _require_solver_type(app, setup_name, {"Transient"})
+        _require_solved_setup(app, setup_name)
         data = create_report_and_get_data(
             app.post,
             expressions=[f"InducedVoltage({phase_name})"],
@@ -149,16 +164,22 @@ def get_flux_density(setup_name: str = "Setup1", point: list[float] | None = Non
     """
     try:
         app = _app()
+        _require_solver_type(app, setup_name, {"Transient", "Magnetostatic", "EddyCurrent"})
+        _require_solved_setup(app, setup_name)
         if point is None:
             point = [0, 0, 0]
+        if len(point) != 3:
+            return _err("point 必须为长度为 3 的坐标列表 [x, y, z]")
         field_val = app.post.evaluate_expression(
             expression="Mag_B",
             location=point,
             setup=setup_name,
         )
+        if field_val is None:
+            return _err("未获取到磁通密度值，请确认求解结果和采样点位置有效")
         return _ok({
             "point_mm": point,
-            "flux_density_T": round(field_val, 6) if field_val else None,
+            "flux_density_T": round(field_val, 6),
         })
     except Exception as e:
         return _err(str(e))
@@ -174,6 +195,7 @@ def get_losses(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
         app = _app()
         _require_motor_state(app, needs_winding=True)
         _require_solver_type(app, setup_name, {"Transient", "EddyCurrent", "Magnetostatic"})
+        _require_solved_setup(app, setup_name)
         expressions = ["CoreLoss", "OhmicLoss"]
         data = create_report_and_get_data(
             app.post,
@@ -226,6 +248,8 @@ def export_results(output_path: str, result_type: str = "torque") -> dict:
 
         ensure_parent_dir(output_path)
         app.post.export_report_to_file(report_name, output_path)
+        if not os.path.exists(output_path):
+            return _err(f"结果导出后未生成文件: {output_path}")
         return _ok(ok_message(f"结果已导出到：{output_path}", output_path=output_path, result_type=result_type))
     except Exception as e:
         return _err(str(e))
@@ -256,6 +280,7 @@ def get_inductance(
         app = _app()
         _require_motor_state(app, needs_winding=True)
         _require_solver_type(app, setup_name, {"Magnetostatic", "Transient"})
+        _require_solved_setup(app, setup_name)
         if phases is None:
             phases = ["PhaseA", "PhaseB", "PhaseC"]
 
@@ -319,6 +344,7 @@ def get_flux_linkage(
         app = _app()
         _require_motor_state(app, needs_winding=True)
         _require_solver_type(app, setup_name, {"Transient", "Magnetostatic"})
+        _require_solved_setup(app, setup_name)
         if phases is None:
             phases = ["PhaseA", "PhaseB", "PhaseC"]
 
@@ -389,6 +415,7 @@ def get_cogging_torque(
         app = _app()
         _require_motor_state(app, needs_motion=True)
         _require_solver_type(app, setup_name, {"Magnetostatic", "Transient"})
+        _require_solved_setup(app, setup_name)
         data = create_report_and_get_data(
             app.post,
             expressions=["Moving1.Torque"],
@@ -442,6 +469,29 @@ def get_efficiency_map(
     """
     try:
         app = _app()
+        state = _get_model_state(app)
+        sweep_metadata = state.get("parametric_sweeps", {}).get(sweep_name) if sweep_name else None
+        if sweep_name:
+            if not sweep_metadata:
+                return _err(f"未找到参数扫描 '{sweep_name}' 的元数据，请先通过 create_2d_sweep 创建并运行该扫描")
+            if sweep_metadata.get("type") != "2d":
+                return _err(f"参数扫描 '{sweep_name}' 不是二维扫描，不能用于效率 MAP")
+            if not sweep_metadata.get("analyzed"):
+                return _err(f"参数扫描 '{sweep_name}' 尚未执行，请先调用 run_parametric_sweep")
+            param_names = sweep_metadata.get("param_names", [])
+            if speed_param not in param_names or current_param not in param_names:
+                return _err(
+                    f"参数扫描 '{sweep_name}' 不包含 speed/current 参数组合 "
+                    f"({speed_param}, {current_param})；当前参数: {', '.join(param_names)}"
+                )
+            required_expressions = {"Moving1.Torque", "CoreLoss", "OhmicLoss"}
+            configured_expressions = set(sweep_metadata.get("result_expressions", []))
+            missing_expressions = sorted(required_expressions - configured_expressions)
+            if missing_expressions:
+                return _err(
+                    f"参数扫描 '{sweep_name}' 缺少效率 MAP 所需结果表达式: "
+                    f"{', '.join(missing_expressions)}"
+                )
         # 获取当前扫描的所有设计点结果
         sweep_results = app.parametrics.get_variation_values(
             setup_name=setup_name,
@@ -452,25 +502,20 @@ def get_efficiency_map(
         skipped_points = 0
         for variation in sweep_results:
             try:
+                if speed_param not in variation or current_param not in variation:
+                    raise ValueError("missing speed/current parameter")
                 speed_rpm = _parse_numeric_value(variation.get(speed_param, 0))
                 current_A = _parse_numeric_value(variation.get(current_param, 0))
                 # 转矩表达式名在 create_2d_sweep 中为 "Moving1.Torque"（带运动体前缀），
                 # 此处兼容不同版本/配置下的多种可能键名
-                torque_Nm = _parse_numeric_value(
-                    variation.get("Moving1.Torque")
-                    or variation.get("Torque")
-                    or 0
-                )
-                core_loss_W = _parse_numeric_value(
-                    variation.get("CoreLoss")
-                    or variation.get("Core Loss")
-                    or 0
-                )
-                copper_loss_W = _parse_numeric_value(
-                    variation.get("OhmicLoss")
-                    or variation.get("Ohmic Loss")
-                    or 0
-                )
+                torque_value = variation.get("Moving1.Torque") or variation.get("Torque")
+                core_loss_value = variation.get("CoreLoss") or variation.get("Core Loss")
+                copper_loss_value = variation.get("OhmicLoss") or variation.get("Ohmic Loss")
+                if torque_value is None or core_loss_value is None or copper_loss_value is None:
+                    raise ValueError("missing torque/loss expressions")
+                torque_Nm = _parse_numeric_value(torque_value)
+                core_loss_W = _parse_numeric_value(core_loss_value)
+                copper_loss_W = _parse_numeric_value(copper_loss_value)
 
                 # 输出功率 Pout = T * ω（W）
                 omega = speed_rpm * 2 * 3.14159 / 60
@@ -533,16 +578,31 @@ def check_demagnetization(
     """
     try:
         app = _app()
+        _require_motor_state(app)
+        _require_solver_type(app, setup_name, {"Transient", "Magnetostatic"})
+        _require_solved_setup(app, setup_name)
+        if not (0.0 <= safety_margin <= 1.0):
+            return _err("safety_margin 必须在 0 到 1 之间")
+        if operating_temperature_C < -273.15:
+            return _err("operating_temperature_C 不能低于绝对零度")
+        if operating_temperature_C >= 186.7:
+            return _err("当前线性温度系数模型会导致 Hcb<=0，无法进行有效退磁校核")
 
         # 自动查找永磁体对象
         if magnet_objects is None:
-            all_objects = app.modeler.object_names
+            all_objects = getattr(app.modeler, "object_names", None)
+            if callable(all_objects):
+                all_objects = all_objects()
+            if all_objects is None:
+                all_objects = []
             magnet_objects = [obj for obj in all_objects if "Magnet" in obj or "PM" in obj]
         if not magnet_objects:
             return _err("未找到永磁体对象，请通过 magnet_objects 参数指定（通常命名含 'Magnet' 或 'PM'）")
 
         results = {}
         demagnetized = []
+        successful_magnets = []
+        failed_magnets = []
 
         for magnet_name in magnet_objects:
             try:
@@ -567,32 +627,51 @@ def check_demagnetization(
                 temp_coeff = -0.006  # /°C，即每°C 降低 0.6%
                 delta_t = operating_temperature_C - 20.0
                 hcb_at_temp = hcb_20c * (1 + temp_coeff * delta_t)  # A/m
+                if hcb_at_temp <= 0:
+                    raise ValueError("温度修正后的 Hcb<=0，当前线性模型已失效")
+                if b_min is None or h_max is None:
+                    raise ValueError("未获取到完整的磁体场量数据")
 
                 # 安全系数：1 - |H_max| / Hcb
-                margin = 1.0 - (abs(h_max or 0.0) / hcb_at_temp) if hcb_at_temp > 0 else 0.0
+                margin = 1.0 - (abs(h_max) / hcb_at_temp)
                 is_safe = margin >= safety_margin
 
                 results[magnet_name] = {
-                    "min_B_T": round(b_min, 4) if b_min else None,
-                    "max_H_A_per_m": round(h_max, 1) if h_max else None,
+                    "min_B_T": round(b_min, 4),
+                    "max_H_A_per_m": round(h_max, 1),
                     "Hcb_at_temp_kA_per_m": round(hcb_at_temp / 1000, 1),
                     "demagnetization_margin": round(margin, 4),
                     "is_safe": is_safe,
                     "status": "✓ 安全" if is_safe else "⚠ 退磁风险",
                 }
+                successful_magnets.append(magnet_name)
                 if not is_safe:
                     demagnetized.append(magnet_name)
             except Exception as e:
                 results[magnet_name] = {"error": str(e)}
+                failed_magnets.append(magnet_name)
 
-        overall_safe = len(demagnetized) == 0
-        return _ok({
+        if not successful_magnets:
+            return _err("未能成功提取任何永磁体的退磁校核数据，请确认磁体对象、求解结果和场量表达式有效")
+
+        overall_safe = len(demagnetized) == 0 and not failed_magnets
+        result = {
             "overall_safe": overall_safe,
             "operating_temperature_C": operating_temperature_C,
             "safety_threshold": safety_margin,
             "at_risk_magnets": demagnetized,
+            "evaluated_magnets": successful_magnets,
+            "failed_magnets": failed_magnets,
             "magnet_results": results,
-            "summary": "所有永磁体退磁安全" if overall_safe else f"⚠ {len(demagnetized)} 个磁体存在退磁风险",
-        })
+            "summary": (
+                "所有永磁体退磁安全"
+                if overall_safe
+                else f"⚠ {len(demagnetized)} 个磁体存在退磁风险，{len(failed_magnets)} 个磁体校核失败"
+            ),
+        }
+        warnings = []
+        if failed_magnets:
+            warnings.append(f"以下磁体未完成退磁校核: {', '.join(failed_magnets)}")
+        return _ok(append_warnings(result, warnings))
     except Exception as e:
         return _err(str(e))

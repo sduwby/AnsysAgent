@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from tools.maxwell_tools import _get_model_state, _get_setup_names
 from tools.utils import _ok, _err, append_warnings, ensure_parent_dir
 
 
@@ -63,6 +64,15 @@ def create_field_plot(
         app = _app()
         plot_name = plot_name or f"{quantity}_Field_Plot"
         setup_sweep = f"{setup_name} : {sweep_name}"
+        if quantity not in _FIELD_QUANTITIES:
+            return _err(f"未知场量名称: {quantity}；当前支持: {', '.join(sorted(_FIELD_QUANTITIES))}")
+        setup_names = _get_setup_names(app)
+        if setup_names and setup_name not in setup_names:
+            return _err(f"求解设置不存在: {setup_name}；当前可用: {', '.join(setup_names)}")
+        state = _get_model_state(app)
+        setup_info = state.get("setups", {}).get(setup_name, {})
+        if setup_info.get("solved") is False:
+            return _err(f"求解设置 '{setup_name}' 尚未完成求解，无法创建场图")
 
         if object_names is None:
             # 获取所有非背景几何体
@@ -76,6 +86,10 @@ def create_field_plot(
 
         if not object_names:
             return _err("未找到可绘制云图的几何体，请确认几何模型已建立")
+        if hasattr(app.modeler, "get_object_from_name"):
+            missing_objects = [name for name in object_names if app.modeler.get_object_from_name(name) is None]
+            if missing_objects:
+                return _err(f"以下几何体不存在，无法创建场图: {', '.join(missing_objects)}")
 
         # 创建场图
         if plot_on_surface:
@@ -132,6 +146,9 @@ def export_field_image(
         warnings: list[str] = []
         if not output_path.lower().endswith(".png"):
             output_path += ".png"
+        field_plots = getattr(app.post, "field_plots", {})
+        if isinstance(field_plots, dict) and plot_name not in field_plots:
+            return _err(f"场图 '{plot_name}' 不存在，请先调用 create_field_plot")
 
         ensure_parent_dir(output_path)
 
@@ -161,6 +178,8 @@ def export_field_image(
             width=width,
             height=height,
         )
+        if not os.path.exists(output_path):
+            return _err(f"云图 '{plot_name}' 导出后未生成文件，请确认 AEDT 导出接口执行成功")
 
         file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
         return _ok(append_warnings({

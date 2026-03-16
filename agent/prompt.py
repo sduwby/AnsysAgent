@@ -21,9 +21,9 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 
 1. **connect_aedt(version="2024.1", is_3d=False, non_graphical=False, project_path="", design_name="")** - 连接/启动 AEDT；is_3d=True 用 Maxwell 3D，False 用 2D；可选指定已有项目和设计
 2. **create_maxwell_project(project_name, design_name="Motor")** - 创建 Maxwell 项目和设计
-3. **create_motor_geometry(stator_outer_radius, stator_inner_radius, rotor_outer_radius, rotor_inner_radius, num_slots, num_poles, magnet_thickness, stack_length=50.0)** - 建立简化 PMSM 几何（定子/转子/永磁体/气隙），所有尺寸单位 mm；会显式提示该几何尚未自动建立运动带和永磁体磁化方向
+3. **create_motor_geometry(stator_outer_radius, stator_inner_radius, rotor_outer_radius, rotor_inner_radius, num_slots, num_poles, magnet_thickness, stack_length=50.0)** - 建立简化 PMSM 几何（定子/转子/永磁体/气隙），所有尺寸单位 mm；连续尺寸会绑定为设计变量，便于扫描/优化，但 `num_slots/num_poles` 仍是拓扑参数，修改后需重建几何；同时会显式提示运动带和磁化方向配置状态
 4. **assign_material(object_name, material_name)** - 赋予材料（material_name 须存在于 AEDT 材料库，如 "M250-35A"、"NdFe35"）
-5. **setup_winding(phase_name, current_amplitude, conductor_names=None, frequency=0, phase_angle=0.0, turns=1, parallel_branches=1, reverse_polarity=False)** - 配置绕组激励；可显式指定导体列表，也可在标准三相等间隔槽位下自动推断；支持匝数、并联支路和极性
+5. **setup_winding(phase_name, current_amplitude, conductor_names=None, grouping_strategy="three_phase_equal_spacing", frequency=0, phase_angle=0.0, turns=1, parallel_branches=1, reverse_polarity=False)** - 配置绕组激励；未显式指定导体列表时默认按标准三相等间隔槽位自动推断，也可将 `grouping_strategy="manual_only"` 强制要求手工指定；支持匝数、并联支路和极性
 6. **add_solution_setup(setup_name="Setup1", solver_type="Transient", stop_time=0.02, time_step=0.0001, num_passes=10, frequency_Hz=50.0)** - 添加求解设置；solver_type: Transient/Magnetostatic/EddyCurrent；stop_time/time_step 单位秒（瞬态专用），frequency_Hz 用于 EddyCurrent
 7. **run_simulation(setup_name="Setup1")** - 运行仿真
 8. **get_torque(setup_name="Setup1", sweep_name="LastAdaptive")** - 提取平均转矩（Nm）及时域波形；返回 avg_torque_Nm 和 waveform
@@ -58,20 +58,20 @@ SYSTEM_PROMPT = """你是一名 Ansys 仿真专家助手，专注于电机全流
 ## 参数化扫描工具
 
 27. **add_parametric_variable(name, value, unit="mm")** - 添加/设置设计变量；unit 可为 mm/deg/A 等
-28. **create_parametric_sweep(param_name, start, stop, step, setup_name="Setup1")** - 创建单参数线性扫描，自动计算扫描点
+28. **create_parametric_sweep(param_name, start, stop, step, setup_name="Setup1", result_expressions=None)** - 创建单参数线性扫描，自动计算扫描点；会校验变量、setup 和结果表达式是否与当前模型状态匹配，`result_expressions` 留空时自动推断
 29. **run_parametric_sweep(sweep_name="")** - 执行扫描仿真；sweep_name 为空字符串则运行全部
-30. **get_sweep_results(param_name, result_expression="Torque", sweep_name="")** - 提取扫描结果并标注最大/最小值点；result_expression 如 "Torque"/"CoreLoss"
-31. **create_2d_sweep(param1_name, param1_values, param2_name, param2_values, setup_name="Setup1")** - 创建二维笛卡尔积参数扫描，适合绘制效率 MAP
+30. **get_sweep_results(param_name, result_expression="Torque", sweep_name="")** - 提取扫描结果并标注最大/最小值点；如果提供 `sweep_name`，还会校验该扫描是否已执行且包含目标参数/表达式；result_expression 如 "Torque"/"CoreLoss"
+31. **create_2d_sweep(param1_name, param1_values, param2_name, param2_values, setup_name="Setup1", result_expressions=None)** - 创建二维笛卡尔积参数扫描，适合绘制效率 MAP；会校验变量、setup 和结果表达式
 
 ## optiSLang 优化工具
 
 32. **connect_optislang(host="localhost", port=5310, timeout=60)** - 连接 optiSLang gRPC 服务
 33. **create_optimization_project(project_name, algorithm="ARSM")** - 创建优化项目；algorithm: ARSM/NLPQL/EA
-34. **add_design_variable(name, lower_bound, upper_bound, initial_value=None, reference_value=None)** - 添加设计变量；initial_value 默认取区间中点
+34. **add_design_variable(name, lower_bound, upper_bound, initial_value=None, reference_value=None)** - 添加设计变量；会优先校验该变量是否已绑定到当前 Maxwell 连续参数，`num_slots/num_poles` 这类拓扑参数不能直接作为连续优化变量
 35. **add_response(name, response_type="objective", target="minimize", limit=None)** - 添加优化响应；response_type: objective/constraint；target: minimize/maximize；limit 为约束上限
 36. **run_sensitivity_study(num_designs=30, method="MOP")** - 运行敏感性分析；method: MOP（元模型，推荐）/LHS/SOBOL
 37. **run_optimization(algorithm="ARSM", max_iterations=50, num_parallel_runs=1)** - 启动优化；algorithm: ARSM/NLPQL/EA/OMSTSP
-38. **get_optimization_results()** - 获取最优设计；返回 best_design、best_objectives、num_evaluations
+38. **get_optimization_results()** - 获取最优设计；返回 best_design、best_objectives、num_evaluations，并尽量给出项目/工作流来源以及与最近一次优化上下文是否一致的 warning
 39. **get_sensitivity_results()** - 获取 CoP（Coefficient of Prognosis）敏感性系数，识别关键参数
 40. **disconnect_optislang()** - 断开 optiSLang 连接并释放资源
 

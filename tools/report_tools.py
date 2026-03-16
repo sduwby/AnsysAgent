@@ -33,6 +33,12 @@ def generate_report(
     try:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         results = results or {}
+        if not output_path.strip():
+            return _err("output_path 不能为空")
+        if format not in {"html", "markdown"}:
+            return _err(f"不支持的报告格式: {format}；当前仅支持 html 或 markdown")
+        if not results:
+            return _err("results 不能为空；请至少提供一项仿真结果后再生成报告")
 
         if format == "html":
             content = _build_html_report(motor_name, now, results)
@@ -48,6 +54,8 @@ def generate_report(
         ensure_parent_dir(output_path)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(content)
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            return _err(f"报告写入失败或文件为空: {output_path}")
 
         return _ok({
             "output_path": output_path,
@@ -217,14 +225,21 @@ def export_aedt_report(
             # 导出 CSV
             csv_path = os.path.join(output_dir, f"{name}.csv")
             app.post.export_report_to_file(name, csv_path)
+            if not os.path.exists(csv_path):
+                warnings.append(f"{name} CSV 导出后未生成文件")
+                continue
             # 导出图片
             img_path = os.path.join(output_dir, f"{name}.png")
             try:
                 app.post.export_report_to_jpg(name, img_path)
+                if not os.path.exists(img_path):
+                    warnings.append(f"{name} PNG 导出后未生成文件")
             except Exception as e:
                 warnings.append(f"{name} PNG 导出失败: {e}")
             exported.append(name)
 
+        if not exported:
+            return _err("未成功导出任何报告，请确认报告存在且 AEDT 导出接口可用")
         return _ok(append_warnings({
             "exported_reports": exported,
             "output_dir": output_dir,

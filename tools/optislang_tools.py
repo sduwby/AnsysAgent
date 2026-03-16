@@ -24,11 +24,61 @@ def _get_osl():
     return _osl
 
 
+def _get_maxwell_binding_context():
+    try:
+        from tools.maxwell_tools import _app as _get_maxwell_app, _get_model_state
+        app = _get_maxwell_app()
+        state = _get_model_state(app)
+        return app, state
+    except Exception:
+        return None, {}
+
+
+def _collect_maxwell_variable_names(app, state: dict) -> set[str]:
+    names = set()
+    geometry = state.get("geometry", {})
+    names.update(geometry.get("geometry_design_variables", []))
+    variable_manager = getattr(app, "variable_manager", None)
+    for attr_name in ("variables", "updated"):
+        values = getattr(variable_manager, attr_name, None)
+        if isinstance(values, dict):
+            names.update(values)
+    variable_names = getattr(variable_manager, "variable_names", None)
+    if callable(variable_names):
+        try:
+            names.update(variable_names())
+        except Exception:
+            pass
+    elif isinstance(variable_names, (list, tuple, set)):
+        names.update(variable_names)
+    return names
+
+
+def _get_project_path(osl) -> str | None:
+    project = getattr(getattr(osl, "application", None), "project", None)
+    for attr_name in ("path", "file_path", "project_path"):
+        value = getattr(project, attr_name, None)
+        if isinstance(value, str) and value:
+            return value
+    return _osl_config.get("project_path")
+
+
 def _ensure_optislang_prerequisites(*, require_variables: bool = False, require_responses: bool = False) -> None:
     variables = _osl_config.get("design_variables", set())
     responses = _osl_config.get("responses", set())
+    variable_bindings = _osl_config.get("design_variable_bindings", {})
     if require_variables and not variables:
         raise RuntimeError("尚未配置任何设计变量，请先调用 add_design_variable。")
+    if require_variables:
+        unverified = sorted(
+            name for name in variables
+            if not variable_bindings.get(name, {}).get("binding_verified", False)
+        )
+        if unverified:
+            raise RuntimeError(
+                "以下设计变量尚未验证与当前 Maxwell 参数绑定："
+                f"{', '.join(unverified)}"
+            )
     if require_responses and not responses:
         raise RuntimeError("尚未配置任何响应/目标，请先调用 add_response。")
 
@@ -125,6 +175,26 @@ def add_design_variable(
         init = initial_value if initial_value is not None else (lower_bound + upper_bound) / 2
         ref = reference_value if reference_value is not None else init
         warnings: list[str] = []
+        binding_verified = False
+        binding_source = None
+        maxwell_app, maxwell_state = _get_maxwell_binding_context()
+        geometry = maxwell_state.get("geometry", {})
+        if geometry.get("topology_locked") and name in {"num_slots", "num_poles"}:
+            return _err(f"{name} 属于电机拓扑参数，当前几何需重建，不能作为连续优化变量直接加入")
+        if maxwell_app is not None:
+            known_variables = _collect_maxwell_variable_names(maxwell_app, maxwell_state)
+            if known_variables and name not in known_variables:
+                return _err(
+                    f"当前 Maxwell 设计中未找到参数 '{name}'；"
+                    "请先通过 create_motor_geometry 或 add_parametric_variable 创建并绑定该变量"
+                )
+            if name in known_variables:
+                binding_verified = True
+                binding_source = "maxwell_design"
+            else:
+                warnings.append("已连接 Maxwell，但未枚举到任何设计变量，无法验证当前变量绑定")
+        else:
+            warnings.append("当前未连接 Maxwell，无法验证设计变量是否已绑定到底层电机模型")
         root_system = osl.application.project.root_system
         param = OptimizationParameter(
             name=name,
@@ -143,6 +213,10 @@ def add_design_variable(
                     warnings.append(f"{attr_name} 写入失败: {e}")
         root_system.parameter_manager.add_parameter(param)
         _osl_config.setdefault("design_variables", set()).add(name)
+        _osl_config.setdefault("design_variable_bindings", {})[name] = {
+            "binding_verified": binding_verified,
+            "binding_source": binding_source,
+        }
         if not initial_applied and initial_value is not None:
             warnings.append("当前 optiSLang 参数对象未暴露可写的初始值属性，initial_value 未生效")
         return _ok(append_warnings(ok_message(
@@ -152,6 +226,8 @@ def add_design_variable(
             upper_bound=upper_bound,
             initial_value=init,
             reference_value=ref,
+            binding_verified=binding_verified,
+            binding_source=binding_source,
         ), warnings))
     except Exception as e:
         return _err(str(e))
@@ -231,6 +307,12 @@ def run_sensitivity_study(
         _ensure_optislang_prerequisites(require_variables=True, require_responses=True)
         _osl_config["num_designs"] = num_designs
         _osl_config["method"] = method
+        _osl_config["last_run_kind"] = "sensitivity"
+        _osl_config["last_run_context"] = {
+            "variables": sorted(_osl_config.get("design_variables", set())),
+            "responses": sorted(_osl_config.get("responses", set())),
+            "project_path": _get_project_path(osl),
+        }
         # osl.project.start() 会阻塞直到 optiSLang 完成所有计算
         # 具体的敏感性分析方法和采样点数须在 optiSLang 项目工作流节点中预先配置
         osl.application.project.start()
@@ -270,6 +352,12 @@ def run_optimization(
             "algorithm": algorithm,
             "max_iterations": max_iterations,
             "num_parallel_runs": num_parallel_runs,
+            "last_run_kind": "optimization",
+            "last_run_context": {
+                "variables": sorted(_osl_config.get("design_variables", set())),
+                "responses": sorted(_osl_config.get("responses", set())),
+                "project_path": _get_project_path(osl),
+            },
         })
         # osl.application.project.start() 阻塞直到优化完成
         osl.application.project.start()
@@ -301,6 +389,12 @@ def get_optimization_results() -> dict:
         osl = _get_osl()
         root_system = osl.application.project.root_system
         warnings: list[str] = []
+        project_path = _get_project_path(osl)
+        run_context = _osl_config.get("last_run_context", {})
+        if _osl_config.get("last_run_kind") != "optimization":
+            warnings.append("当前会话中最近一次记录的运行不是 optimization，结果来源可能与当前预期不一致")
+        if run_context.get("project_path") and project_path and run_context["project_path"] != project_path:
+            warnings.append("当前 optiSLang 项目路径与最近一次优化运行记录不一致，请确认结果来源")
 
         design = None
         candidate_getters = (
@@ -336,6 +430,25 @@ def get_optimization_results() -> dict:
             if value is None:
                 value = getattr(r, "reference_value", None)
             responses[r.name] = value
+        if not params and not responses:
+            return _err("优化结果为空：未读取到任何设计变量或响应值，请确认优化已完成且结果对象有效。")
+
+        expected_variables = set(run_context.get("variables", []))
+        expected_responses = set(run_context.get("responses", []))
+        if expected_variables:
+            missing_variables = sorted(expected_variables - set(params))
+            extra_variables = sorted(set(params) - expected_variables)
+            if missing_variables:
+                warnings.append(f"结果中缺少已登记设计变量: {', '.join(missing_variables)}")
+            if extra_variables:
+                warnings.append(f"结果中包含未登记设计变量: {', '.join(extra_variables)}")
+        if expected_responses:
+            missing_responses = sorted(expected_responses - set(responses))
+            extra_responses = sorted(set(responses) - expected_responses)
+            if missing_responses:
+                warnings.append(f"结果中缺少已登记响应: {', '.join(missing_responses)}")
+            if extra_responses:
+                warnings.append(f"结果中包含未登记响应: {', '.join(extra_responses)}")
 
         num_evaluations = None
         for owner in (design, root_system, getattr(osl.application, "project", None)):
@@ -349,11 +462,27 @@ def get_optimization_results() -> dict:
             if num_evaluations is not None:
                 break
 
+        workflow_name = None
+        for owner in (design, root_system):
+            if owner is None:
+                continue
+            for attr in ("name", "system_name", "uid", "id"):
+                value = getattr(owner, attr, None)
+                if isinstance(value, str) and value:
+                    workflow_name = value
+                    break
+            if workflow_name:
+                break
+
         result = {
             "best_design": params,
             "best_objectives": responses,
             "result_source": used_getter,
         }
+        if project_path:
+            result["project_path"] = project_path
+        if workflow_name:
+            result["workflow_name"] = workflow_name
         if num_evaluations is not None:
             result["num_evaluations"] = num_evaluations
         return _ok(append_warnings(result, warnings))

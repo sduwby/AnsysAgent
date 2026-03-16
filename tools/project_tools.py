@@ -56,16 +56,28 @@ def open_project(file_path: str) -> dict:
         file_path: 项目 .aedt 文件绝对路径
     """
     try:
+        if not file_path.strip():
+            return _err("file_path 不能为空")
+        if not file_path.lower().endswith(".aedt"):
+            return _err("只能打开 .aedt 项目文件")
         if not os.path.exists(file_path):
             return _err(f"找不到文件: {file_path}")
         app = _app()
         # 通过 AEDT 桌面 COM 接口打开项目
         app.odesktop.OpenProject(file_path)
         project_name = os.path.splitext(os.path.basename(file_path))[0]
-        return _ok(
-            f"已在当前 AEDT 会话中打开项目 '{project_name}'。"
-            "如需切换到该项目中的特定设计，请重新调用 connect_aedt，传入 project_path 和 design_name。"
-        )
+        active_file = getattr(app, "project_file", "")
+        warnings: list[str] = []
+        if active_file and os.path.abspath(active_file) != os.path.abspath(file_path):
+            warnings.append("项目已通过桌面会话打开，但当前 app 上下文可能仍指向旧项目；请重新调用 connect_aedt 切换上下文")
+        return _ok(ok_message(
+            f"已在当前 AEDT 会话中打开项目 '{project_name}'。",
+            project_name=project_name,
+            file_path=file_path,
+            reconnect_recommended=True,
+            next_step="如需切换到该项目中的特定设计，请重新调用 connect_aedt 并传入 project_path 和 design_name。",
+            warnings=warnings or None,
+        ))
     except Exception as e:
         return _err(str(e))
 
@@ -85,6 +97,8 @@ def close_project(project_name: str = "", save_first: bool = True) -> dict:
     try:
         app = _app()
         name = project_name or app.project_name
+        if not name:
+            return _err("未找到可关闭的项目名称")
         if save_first:
             app.save_project()
         app.close_project(name)

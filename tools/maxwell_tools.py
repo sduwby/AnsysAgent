@@ -44,7 +44,12 @@ def _get_model_state(app) -> dict:
     return state
 
 
-def _infer_phase_conductors(app, phase_name: str) -> list[str]:
+def _infer_phase_conductors(app, phase_name: str, grouping_strategy: str = "three_phase_equal_spacing") -> list[str]:
+    if grouping_strategy == "manual_only":
+        return []
+    if grouping_strategy != "three_phase_equal_spacing":
+        return []
+
     state = _get_model_state(app)
     geometry = state.get("geometry", {})
     num_slots = geometry.get("num_slots")
@@ -116,6 +121,34 @@ def _configure_rotation_motion(app, rotor_name: str, airgap_name: str) -> bool:
         except Exception:
             continue
     return False
+
+
+def _set_geometry_variables(app, geometry_values: dict[str, float]) -> tuple[dict[str, str], list[str]]:
+    warnings: list[str] = []
+    variable_manager = getattr(app, "variable_manager", None)
+    set_variable = getattr(variable_manager, "set_variable", None)
+    geometry_variables: dict[str, str] = {}
+    for name, value in geometry_values.items():
+        geometry_variables[name] = name
+        if callable(set_variable):
+            try:
+                set_variable(name, f"{value}mm")
+            except Exception as e:
+                warnings.append(f"设计变量 {name} 写入失败: {e}")
+        else:
+            warnings.append("当前 Maxwell 接口未暴露 variable_manager，几何尺寸不会绑定为设计变量")
+            break
+    return geometry_variables, warnings
+
+
+def _radial_point_expr(radius_expr: str, angle_deg: float) -> list[str]:
+    cos_value = math.cos(math.radians(angle_deg))
+    sin_value = math.sin(math.radians(angle_deg))
+    return [
+        f"({radius_expr})*({cos_value:.12g})",
+        f"({radius_expr})*({sin_value:.12g})",
+        "0mm",
+    ]
 
 # ---------------------------------------------------------------------------
 # 工具：connect_aedt - 连接 AEDT
@@ -251,18 +284,34 @@ def create_motor_geometry(
         app = _app()
         modeler = app.modeler
         warnings: list[str] = []
+        geometry_variables, variable_warnings = _set_geometry_variables(
+            app,
+            {
+                "stator_outer_radius": stator_outer_radius,
+                "stator_inner_radius": stator_inner_radius,
+                "rotor_outer_radius": rotor_outer_radius,
+                "rotor_inner_radius": rotor_inner_radius,
+                "magnet_thickness": magnet_thickness,
+                "stack_length": stack_length,
+            },
+        )
+        warnings.extend(variable_warnings)
+        if geometry_variables:
+            warnings.append(
+                "连续几何尺寸已绑定为 Maxwell 设计变量；num_slots/num_poles 仍属于拓扑参数，修改后需重建几何"
+            )
 
         # 定子轭部（环形）
         modeler.create_circle(
             position=[0, 0, 0],
-            radius=stator_outer_radius,
+            radius=geometry_variables.get("stator_outer_radius", stator_outer_radius),
             num_sides=0,
             name="Stator_Outer",
             material="M250-35A",
         )
         modeler.create_circle(
             position=[0, 0, 0],
-            radius=stator_inner_radius,
+            radius=geometry_variables.get("stator_inner_radius", stator_inner_radius),
             num_sides=0,
             name="Stator_Inner_Cut",
         )
@@ -277,14 +326,14 @@ def create_motor_geometry(
         # 转子轭部（环形）
         modeler.create_circle(
             position=[0, 0, 0],
-            radius=rotor_outer_radius,
+            radius=geometry_variables.get("rotor_outer_radius", rotor_outer_radius),
             num_sides=0,
             name="Rotor_Outer",
             material="M250-35A",
         )
         modeler.create_circle(
             position=[0, 0, 0],
-            radius=rotor_inner_radius,
+            radius=geometry_variables.get("rotor_inner_radius", rotor_inner_radius),
             num_sides=0,
             name="Rotor_Inner_Cut",
         )
@@ -298,14 +347,14 @@ def create_motor_geometry(
         # 气隙区域
         modeler.create_circle(
             position=[0, 0, 0],
-            radius=stator_inner_radius,
+            radius=geometry_variables.get("stator_inner_radius", stator_inner_radius),
             num_sides=0,
             name="AirGap_Outer",
             material="vacuum",
         )
         modeler.create_circle(
             position=[0, 0, 0],
-            radius=rotor_outer_radius,
+            radius=geometry_variables.get("rotor_outer_radius", rotor_outer_radius),
             num_sides=0,
             name="AirGap_Inner_Cut",
         )
@@ -321,8 +370,12 @@ def create_motor_geometry(
         # 确保 Maxwell 2D 可正确赋予材料和参与仿真计算。
         pole_angle = 360.0 / num_poles
         magnet_arc = pole_angle * 0.85
-        inner_r = rotor_outer_radius               # 永磁体内弧半径（紧贴转子表面）
-        outer_r = rotor_outer_radius + magnet_thickness  # 永磁体外弧半径
+        inner_r_expr = geometry_variables.get("rotor_outer_radius", str(rotor_outer_radius))
+        outer_r_expr = (
+            f"({geometry_variables['rotor_outer_radius']} + {geometry_variables['magnet_thickness']})"
+            if geometry_variables
+            else str(rotor_outer_radius + magnet_thickness)
+        )
         num_arc_pts = 16  # 每段弧的离散点数，越多弧形越精确
 
         for i in range(num_poles):
@@ -333,20 +386,12 @@ def create_motor_geometry(
 
             # 外弧点列（start_angle → end_angle）
             outer_pts = [
-                [
-                    outer_r * math.cos(math.radians(start_angle + magnet_arc * k / num_arc_pts)),
-                    outer_r * math.sin(math.radians(start_angle + magnet_arc * k / num_arc_pts)),
-                    0,
-                ]
+                _radial_point_expr(outer_r_expr, start_angle + magnet_arc * k / num_arc_pts)
                 for k in range(num_arc_pts + 1)
             ]
             # 内弧点列（end_angle → start_angle，反向以封闭多边形）
             inner_pts = [
-                [
-                    inner_r * math.cos(math.radians(end_angle - magnet_arc * k / num_arc_pts)),
-                    inner_r * math.sin(math.radians(end_angle - magnet_arc * k / num_arc_pts)),
-                    0,
-                ]
+                _radial_point_expr(inner_r_expr, end_angle - magnet_arc * k / num_arc_pts)
                 for k in range(num_arc_pts + 1)
             ]
             polygon = outer_pts + inner_pts  # 外弧 + 内弧构成封闭扇形边界
@@ -364,9 +409,13 @@ def create_motor_geometry(
         # 槽深取定子轭部厚度的 60%，槽宽取槽距的 70%（含绝缘余量）
         slot_pitch = 360.0 / num_slots
         slot_arc = slot_pitch * 0.70
-        cond_inner_r = stator_inner_radius                          # 导体内弧 = 定子内径
-        yoke_thickness = stator_outer_radius - stator_inner_radius
-        cond_outer_r = stator_inner_radius + yoke_thickness * 0.60  # 导体外弧
+        cond_inner_r_expr = geometry_variables.get("stator_inner_radius", str(stator_inner_radius))
+        cond_outer_r_expr = (
+            f"({geometry_variables['stator_inner_radius']} + "
+            f"0.6*({geometry_variables['stator_outer_radius']} - {geometry_variables['stator_inner_radius']}))"
+            if geometry_variables
+            else str(stator_inner_radius + (stator_outer_radius - stator_inner_radius) * 0.60)
+        )
 
         for i in range(num_slots):
             center_angle = i * slot_pitch
@@ -375,19 +424,11 @@ def create_motor_geometry(
             cond_name = f"Conductor_{i + 1}"
 
             cond_outer_pts = [
-                [
-                    cond_outer_r * math.cos(math.radians(s_start + slot_arc * k / num_arc_pts)),
-                    cond_outer_r * math.sin(math.radians(s_start + slot_arc * k / num_arc_pts)),
-                    0,
-                ]
+                _radial_point_expr(cond_outer_r_expr, s_start + slot_arc * k / num_arc_pts)
                 for k in range(num_arc_pts + 1)
             ]
             cond_inner_pts = [
-                [
-                    cond_inner_r * math.cos(math.radians(s_end - slot_arc * k / num_arc_pts)),
-                    cond_inner_r * math.sin(math.radians(s_end - slot_arc * k / num_arc_pts)),
-                    0,
-                ]
+                _radial_point_expr(cond_inner_r_expr, s_end - slot_arc * k / num_arc_pts)
                 for k in range(num_arc_pts + 1)
             ]
             cond_polygon = cond_outer_pts + cond_inner_pts
@@ -434,6 +475,9 @@ def create_motor_geometry(
                 "num_slots": num_slots,
                 "num_poles": num_poles,
                 "stack_length_mm": stack_length,
+                "geometry_design_variables": list(geometry_variables),
+                "parametric_geometry_ready": bool(geometry_variables),
+                "topology_locked": True,
             },
             "motion_configured": motion_configured,
             "magnetization_configured": magnetization_configured,
@@ -448,6 +492,9 @@ def create_motor_geometry(
             stator_outer_diameter_mm=stator_outer_radius * 2,
             rotor_outer_diameter_mm=rotor_outer_radius * 2,
             stack_length_mm=stack_length,
+            geometry_design_variables=list(geometry_variables),
+            parametric_geometry_ready=bool(geometry_variables),
+            topology_locked=True,
             magnetization_configured=magnetization_configured,
             motion_configured=motion_configured,
             torque_ready=state["torque_ready"],
@@ -484,6 +531,7 @@ def setup_winding(
     phase_name: str,
     current_amplitude: float,
     conductor_names: list[str] | None = None,
+    grouping_strategy: str = "three_phase_equal_spacing",
     frequency: float = 0,
     phase_angle: float = 0.0,
     turns: int = 1,
@@ -495,7 +543,8 @@ def setup_winding(
 
     Args:
         phase_name: 相名称，如 "PhaseA"
-        conductor_names: 槽内导体对象名称列表；为空时会尝试按三相等间隔槽号自动推断
+        conductor_names: 槽内导体对象名称列表；为空时会尝试按 grouping_strategy 自动推断
+        grouping_strategy: 自动槽分组策略；默认 "three_phase_equal_spacing"，可选 "manual_only"
         current_amplitude: 峰值电流（A）
         frequency: 电频率（Hz），磁静态仿真置 0
         phase_angle: 相位角（度）
@@ -506,14 +555,22 @@ def setup_winding(
     try:
         app = _app()
         warnings: list[str] = []
+        valid_grouping_strategies = {"three_phase_equal_spacing", "manual_only"}
+        if grouping_strategy not in valid_grouping_strategies:
+            return _err(
+                f"未知 grouping_strategy: {grouping_strategy}；"
+                f"可选 {sorted(valid_grouping_strategies)}"
+            )
         if not conductor_names:
-            conductor_names = _infer_phase_conductors(app, phase_name)
+            conductor_names = _infer_phase_conductors(app, phase_name, grouping_strategy)
             if conductor_names:
                 warnings.append(
-                    f"未显式提供 conductor_names，已按三相等间隔槽号为 {phase_name} 自动推断导体列表"
+                    f"未显式提供 conductor_names，已按 {grouping_strategy} 为 {phase_name} 自动推断导体列表"
                 )
             else:
-                return _err("conductor_names 不能为空，且当前几何不足以自动推断相绕组导体列表")
+                return _err(
+                    "conductor_names 不能为空，且当前几何/分组策略不足以自动推断相绕组导体列表"
+                )
         if turns <= 0:
             return _err("turns 必须为正整数")
         if parallel_branches <= 0:
@@ -580,6 +637,7 @@ def setup_winding(
             "turns": turns,
             "parallel_branches": parallel_branches,
             "reverse_polarity": reverse_polarity,
+            "grouping_strategy": grouping_strategy,
         }
         state["winding_defined"] = True
         return _ok(append_warnings(ok_message(
@@ -592,6 +650,7 @@ def setup_winding(
             turns=turns,
             parallel_branches=parallel_branches,
             reverse_polarity=reverse_polarity,
+            grouping_strategy=grouping_strategy,
         ), warnings))
     except Exception as e:
         return _err(str(e))
@@ -656,6 +715,7 @@ def add_solution_setup(
             "time_step": time_step if solver_type == "Transient" else None,
             "num_passes": num_passes,
             "frequency_Hz": frequency_Hz if solver_type == "EddyCurrent" else None,
+            "solved": False,
         }
         state["last_setup_name"] = setup_name
         state["last_solver_type"] = solver_type
@@ -680,6 +740,13 @@ def run_simulation(setup_name: str = "Setup1") -> dict:
         if setup_names and setup_name not in setup_names:
             return _err(f"求解设置不存在: {setup_name}；当前可用: {', '.join(setup_names)}")
         app.analyze_setup(setup_name)
+        state = _get_model_state(app)
+        setup_info = state.setdefault("setups", {}).setdefault(setup_name, {})
+        setup_info["solved"] = True
+        state.setdefault("solved_setups", [])
+        if setup_name not in state["solved_setups"]:
+            state["solved_setups"].append(setup_name)
+        state["last_solved_setup"] = setup_name
         return _ok(ok_message(f"仿真 '{setup_name}' 已完成", setup_name=setup_name))
     except Exception as e:
         return _err(str(e))
