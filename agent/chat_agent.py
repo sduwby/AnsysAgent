@@ -1,5 +1,8 @@
 """
-对话 Agent：基于多提供商（OpenAI 兼容接口）的主对话循环，支持工具调用。
+主对话 Agent（Main Agent / Orchestrator）：
+- 理解用户意图，通过 delegate_to_agent 工具路由到专业 Sub-Agent
+- 自身保留跨软件协调工具（coupling、project、knowledge）
+- 不直接执行仿真操作
 """
 
 from __future__ import annotations
@@ -15,8 +18,13 @@ from rich.panel import Panel
 
 from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get_provider_api_key
 from agent.prompt import SYSTEM_PROMPT
-from agent.tool_definitions import TOOL_DEFINITIONS, TOOL_REGISTRY
+from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION
 from agent.logger import get_logger
+from agent import dispatcher
+from agent.sub_agents import (
+    MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
+    MotorCADAgent, OptimizationAgent, ReportingAgent,
+)
 from rag.config import DEFAULT_DOC_PATHS, DEFAULT_INDEX_PATH
 from rag.service import build_index, search_index
 
@@ -121,6 +129,24 @@ class ChatAgent:
         self.history: list[dict] = []
         self._knowledge_index_ready = False
         self._prepare_knowledge_index()
+        self._init_sub_agents()
+
+    def _init_sub_agents(self) -> None:
+        """初始化并注册所有 Sub-Agent（复用 MainAgent 的 LLM 客户端和 fallback 链）。"""
+        sub_agent_classes = [
+            MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
+            MotorCADAgent, OptimizationAgent, ReportingAgent,
+        ]
+        names = []
+        for cls in sub_agent_classes:
+            agent = cls(
+                client=self.client,
+                model=self.model,
+                fallback_clients=self._fallback_clients,
+            )
+            dispatcher.register_agent(agent)
+            names.append(agent.name)
+        _log.info("已初始化 %d 个 Sub-Agent: %s", len(names), names)
 
     def _prepare_knowledge_index(self) -> None:
         """准备本地知识索引；存在即复用，不存在则扫描所有默认文档目录构建。"""
@@ -295,7 +321,17 @@ class ChatAgent:
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """执行指定工具，返回 JSON 字符串结果。"""
-        fn = TOOL_REGISTRY.get(tool_name)
+        # 委托工具：转发给 Sub-Agent Dispatcher
+        if tool_name == "delegate_to_agent":
+            result = dispatcher.delegate_to_agent(
+                agent_name=tool_input.get("agent_name", ""),
+                task=tool_input.get("task", ""),
+                context=tool_input.get("context", ""),
+            )
+            return json.dumps(result, ensure_ascii=False)
+
+        # Main-Agent 自有工具
+        fn = MAIN_TOOL_REGISTRY.get(tool_name)
         if fn is None:
             _log.warning("未知工具: %s", tool_name)
             return json.dumps({"success": False, "error": f"未知工具: {tool_name}"})
@@ -318,6 +354,9 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(user_message)
 
+        # Main-Agent 工具：delegate_to_agent + 跨软件协调工具 + 知识工具
+        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS
+
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
 
@@ -326,7 +365,7 @@ class ChatAgent:
                 _create,
                 max_tokens=4096,
                 messages=self._compose_messages(knowledge_context),
-                tools=TOOL_DEFINITIONS,
+                tools=_tools,
                 tool_choice="auto",
             )
 
@@ -343,14 +382,20 @@ class ChatAgent:
             for tool_call in msg.tool_calls:
                 fn_name = tool_call.function.name
                 fn_args = json.loads(tool_call.function.arguments)
-                console.print(
-                    f"[dim]🔧 调用工具: [bold]{fn_name}[/bold] "
-                    f"{json.dumps(fn_args, ensure_ascii=False)}[/dim]"
-                )
+                if fn_name == "delegate_to_agent":
+                    console.print(
+                        f"[dim]🤖 委托给 [bold]{fn_args.get('agent_name')}[/bold] Sub-Agent: "
+                        f"{fn_args.get('task', '')[:80]}...[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"[dim]🔧 调用工具: [bold]{fn_name}[/bold] "
+                        f"{json.dumps(fn_args, ensure_ascii=False)}[/dim]"
+                    )
                 result_str = self._execute_tool(fn_name, fn_args)
                 result_data = json.loads(result_str)
                 if result_data.get("success"):
-                    console.print(f"[green]  ✓ {result_data.get('result', 'OK')}[/green]")
+                    console.print(f"[green]  ✓ {result_data.get('result', 'OK')[:200]}[/green]")
                 else:
                     console.print(f"[red]  ✗ {result_data.get('error', '错误')}[/red]")
 
@@ -370,6 +415,8 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(user_message)
 
+        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS
+
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
 
@@ -379,7 +426,7 @@ class ChatAgent:
                 _create,
                 max_tokens=4096,
                 messages=self._compose_messages(knowledge_context),
-                tools=TOOL_DEFINITIONS,
+                tools=_tools,
                 tool_choice="auto",
             )
 

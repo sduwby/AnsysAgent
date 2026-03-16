@@ -1899,3 +1899,150 @@ TOOL_DEFINITIONS = [
         },
     },
 ]
+
+# ---------------------------------------------------------------------------
+# 按 Sub-Agent 分组的工具名集合
+# ---------------------------------------------------------------------------
+
+_MAXWELL_TOOL_NAMES: frozenset[str] = frozenset({
+    # AEDT 连接 & 建模
+    "connect_aedt", "create_maxwell_project", "create_motor_geometry",
+    "assign_material", "setup_winding", "add_solution_setup", "run_simulation",
+    # 结果提取
+    "get_torque", "get_back_emf", "get_flux_density", "get_losses", "export_results",
+    "get_inductance", "get_flux_linkage", "get_cogging_torque", "get_efficiency_map",
+    "check_demagnetization",
+    # 自定义材料
+    "create_custom_material", "import_bh_curve",
+    # 网格控制
+    "setup_length_mesh", "setup_skin_depth_mesh", "setup_surface_mesh", "get_mesh_stats",
+    # RMXprt 初设计
+    "connect_rmxprt", "create_motor_from_template", "run_rmxprt_analysis", "export_to_maxwell",
+    # 场量可视化
+    "create_field_plot", "export_field_image", "list_field_plots",
+    # Circuit 驱动器联仿
+    "connect_circuit", "create_inverter_circuit", "link_maxwell_to_circuit",
+    "run_circuit_simulation", "get_circuit_results",
+})
+
+_ICEPAK_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_icepak", "setup_motor_thermal", "run_thermal_simulation", "get_temperature_results",
+})
+
+_FLUENT_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_fluent", "read_fluent_mesh", "setup_fluid_models", "define_boundary_conditions",
+    "setup_fluent_solver", "initialize_fluent", "run_fluent_simulation",
+    "get_fluent_results", "export_fluent_data", "setup_fluid_material",
+})
+
+_MAPDL_TOOL_NAMES: frozenset[str] = frozenset({
+    # Mechanical 结构振动
+    "connect_mechanical", "import_maxwell_forces", "run_modal_analysis",
+    "run_harmonic_analysis", "get_vibration_results",
+    # PyMAPDL 结构强度
+    "connect_mapdl", "run_rotor_stress_analysis", "run_thermal_stress_analysis",
+    "run_nvh_harmonic_analysis", "get_mapdl_structural_results", "disconnect_mapdl",
+    # PyDPF 后处理
+    "load_dpf_result", "get_dpf_stress", "get_dpf_temperature",
+    "get_dpf_displacement", "get_dpf_field_statistics", "export_dpf_results_to_csv",
+})
+
+_MOTORCAD_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_motorcad", "set_motorcad_geometry", "run_motorcad_em_analysis",
+    "run_motorcad_thermal_analysis", "run_motorcad_nvh_analysis",
+    "get_motorcad_performance_map", "export_motorcad_to_maxwell", "disconnect_motorcad",
+})
+
+_OPTIMIZATION_TOOL_NAMES: frozenset[str] = frozenset({
+    # optiSLang
+    "connect_optislang", "create_optimization_project", "add_design_variable",
+    "add_response", "run_sensitivity_study", "run_optimization",
+    "get_optimization_results", "get_sensitivity_results", "disconnect_optislang",
+    # 参数化扫描
+    "add_parametric_variable", "create_parametric_sweep", "run_parametric_sweep",
+    "get_sweep_results", "create_2d_sweep",
+})
+
+_REPORTING_TOOL_NAMES: frozenset[str] = frozenset({
+    "generate_report", "export_aedt_report",
+    "create_report_session", "add_report_section", "add_table_to_report",
+    "add_image_to_report", "export_report",
+})
+
+# Main-Agent 保留的工具（跨软件协调 + 知识检索）
+_MAIN_TOOL_NAMES: frozenset[str] = frozenset({
+    "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
+    "save_project", "open_project", "close_project", "list_designs", "copy_design",
+    "build_knowledge_index", "search_official_docs",
+})
+
+
+def _filter_definitions(names: frozenset[str]) -> list[dict]:
+    return [t for t in TOOL_DEFINITIONS if t["function"]["name"] in names]
+
+
+def _filter_registry(names: frozenset[str]) -> dict:
+    return {k: v for k, v in TOOL_REGISTRY.items() if k in names}
+
+
+# 每个 Sub-Agent 的工具定义和注册表
+MAXWELL_TOOL_DEFINITIONS = _filter_definitions(_MAXWELL_TOOL_NAMES)
+MAXWELL_TOOL_REGISTRY = _filter_registry(_MAXWELL_TOOL_NAMES)
+
+ICEPAK_TOOL_DEFINITIONS = _filter_definitions(_ICEPAK_TOOL_NAMES)
+ICEPAK_TOOL_REGISTRY = _filter_registry(_ICEPAK_TOOL_NAMES)
+
+FLUENT_TOOL_DEFINITIONS = _filter_definitions(_FLUENT_TOOL_NAMES)
+FLUENT_TOOL_REGISTRY = _filter_registry(_FLUENT_TOOL_NAMES)
+
+MAPDL_TOOL_DEFINITIONS = _filter_definitions(_MAPDL_TOOL_NAMES)
+MAPDL_TOOL_REGISTRY = _filter_registry(_MAPDL_TOOL_NAMES)
+
+MOTORCAD_TOOL_DEFINITIONS = _filter_definitions(_MOTORCAD_TOOL_NAMES)
+MOTORCAD_TOOL_REGISTRY = _filter_registry(_MOTORCAD_TOOL_NAMES)
+
+OPTIMIZATION_TOOL_DEFINITIONS = _filter_definitions(_OPTIMIZATION_TOOL_NAMES)
+OPTIMIZATION_TOOL_REGISTRY = _filter_registry(_OPTIMIZATION_TOOL_NAMES)
+
+REPORTING_TOOL_DEFINITIONS = _filter_definitions(_REPORTING_TOOL_NAMES)
+REPORTING_TOOL_REGISTRY = _filter_registry(_REPORTING_TOOL_NAMES)
+
+MAIN_TOOL_DEFINITIONS = _filter_definitions(_MAIN_TOOL_NAMES)
+MAIN_TOOL_REGISTRY = _filter_registry(_MAIN_TOOL_NAMES)
+
+# delegate_to_agent 的 OpenAI function calling 定义（由 MainAgent 使用）
+DELEGATE_TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "delegate_to_agent",
+        "description": (
+            "将仿真任务委托给对应的专业 Sub-Agent 执行。"
+            "可用 agent_name：maxwell（电磁仿真/网格/结果/RMXprt/Circuit）、"
+            "icepak（热分析）、fluent（CFD 流体）、mapdl（结构/NVH/DPF后处理）、"
+            "motorcad（Motor-CAD 解析初设计）、optimization（optiSLang优化/参数扫描）、"
+            "reporting（报告生成）。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "enum": [
+                        "maxwell", "icepak", "fluent", "mapdl",
+                        "motorcad", "optimization", "reporting",
+                    ],
+                    "description": "目标 Sub-Agent 名称",
+                },
+                "task": {
+                    "type": "string",
+                    "description": "具体任务描述（清晰、可操作的自然语言，包含全部必要参数）",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "当前会话关键上下文摘要（已完成步骤、设计状态、关键数值等），帮助 Sub-Agent 理解任务背景",
+                },
+            },
+            "required": ["agent_name", "task"],
+        },
+    },
+}
