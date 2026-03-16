@@ -17,6 +17,8 @@ from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import TOOL_DEFINITIONS, TOOL_REGISTRY
 from agent.logger import get_logger
+from rag.config import DEFAULT_DOC_PATHS, DEFAULT_INDEX_PATH
+from rag.service import build_index, search_index
 
 console = Console()
 _log = get_logger("chat_agent")
@@ -89,6 +91,25 @@ _COMPRESS_SYSTEM = (
     "摘要用中文输出，不超过 800 字。"
 )
 
+_KNOWLEDGE_HINTS = (
+    # 通用问答触发词（中文）
+    "怎么", "如何", "为什么", "报错", "错误", "支持", "文档", "api", "help", "faq",
+    "教程", "区别", "含义", "什么意思", "用法", "workflow", "官方", "步骤", "配置",
+    # 通用问答触发词（英文）
+    "how", "why", "error", "document", "docs", "support", "tutorial", "guide", "example",
+    # Ansys 产品线关键词
+    "mapdl", "maxwell", "fluent", "mechanical", "workbench", "aedt", "icepak",
+    "rmxprt", "circuit", "q3d", "hfss", "discovery", "spaceclaim", "pyaedt",
+    "pymechanical", "pymapdl", "pyfluent", "pyansys", "ansys",
+    # 仿真操作关键词
+    "mesh", "网格", "material", "材料", "boundary", "边界", "load", "载荷",
+    "solve", "求解", "setup", "设置", "simulation", "仿真", "analysis", "分析",
+    "result", "结果", "post", "后处理", "plot", "绘图", "export", "导出",
+    "geometry", "几何", "model", "模型", "parameter", "参数", "constraint", "约束",
+    "excitation", "激励", "winding", "绕组", "torque", "转矩", "efficiency", "效率",
+    "temperature", "温度", "stress", "应力", "deformation", "变形", "frequency", "频率",
+)
+
 
 # ---------------------------------------------------------------------------
 # ChatAgent 主类
@@ -98,6 +119,68 @@ class ChatAgent:
     def __init__(self):
         self._init_client()
         self.history: list[dict] = []
+        self._knowledge_index_ready = False
+        self._prepare_knowledge_index()
+
+    def _prepare_knowledge_index(self) -> None:
+        """准备本地知识索引；存在即复用，不存在则扫描所有默认文档目录构建。"""
+        try:
+            if DEFAULT_INDEX_PATH.exists():
+                self._knowledge_index_ready = True
+                return
+            # 扫描所有 DEFAULT_DOC_PATHS（docs/api + knowledge/official + knowledge/internal）
+            existing_paths = [p for p in DEFAULT_DOC_PATHS if p.exists()]
+            if existing_paths:
+                index_data = build_index(doc_paths=existing_paths, index_path=DEFAULT_INDEX_PATH)
+                self._knowledge_index_ready = index_data.get("num_chunks", 0) > 0
+                if self._knowledge_index_ready:
+                    _log.info("本地知识索引已初始化，共 %d 个 chunk（来源目录: %s）",
+                              index_data["num_chunks"],
+                              ", ".join(str(p) for p in existing_paths))
+            else:
+                _log.info("未找到任何知识目录，跳过知识索引初始化")
+        except Exception as e:
+            _log.warning("知识索引初始化失败，继续使用纯执行模式: %s", e)
+
+    def _should_use_knowledge(self, user_message: str) -> bool:
+        text = user_message.lower()
+        return any(hint in text for hint in _KNOWLEDGE_HINTS)
+
+    def _build_knowledge_context(self, user_message: str) -> str:
+        if not self._knowledge_index_ready:
+            return ""
+        if not self._should_use_knowledge(user_message):
+            return ""
+        try:
+            result = search_index(
+                query=user_message,
+                top_k=4,
+                index_path=DEFAULT_INDEX_PATH,
+            )
+        except Exception as e:
+            _log.warning("知识检索失败，跳过本轮知识增强: %s", e)
+            return ""
+        hits = result.get("results", [])
+        if not hits:
+            return ""
+        lines = [
+            "以下是本地知识库中与当前问题最相关的片段，请优先参考这些内容回答；",
+            "若涉及执行动作，仍需结合当前工具状态和真实求解前置条件。",
+        ]
+        for idx, hit in enumerate(hits, start=1):
+            lines.append(
+                f"{idx}. [{hit.get('source_type')}] {hit.get('title')} | "
+                f"path={hit.get('path')} | score={hit.get('score')}"
+            )
+            lines.append(f"   摘要: {hit.get('snippet')}")
+        return "\n".join(lines)
+
+    def _compose_messages(self, knowledge_context: str = "") -> list[dict]:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if knowledge_context:
+            messages.append({"role": "system", "content": knowledge_context})
+        messages.extend(self.history)
+        return messages
 
     def _maybe_compress_history(self) -> None:
         """
@@ -233,6 +316,7 @@ class ChatAgent:
         """发送用户消息，返回最终 Assistant 回复（非流式）。"""
         self.history.append({"role": "user", "content": user_message})
         self._maybe_compress_history()
+        knowledge_context = self._build_knowledge_context(user_message)
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
@@ -241,7 +325,7 @@ class ChatAgent:
             response = self._call_with_fallback(
                 _create,
                 max_tokens=4096,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                messages=self._compose_messages(knowledge_context),
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
             )
@@ -284,6 +368,7 @@ class ChatAgent:
         """
         self.history.append({"role": "user", "content": user_message})
         self._maybe_compress_history()
+        knowledge_context = self._build_knowledge_context(user_message)
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
@@ -293,7 +378,7 @@ class ChatAgent:
             response = self._call_with_fallback(
                 _create,
                 max_tokens=4096,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                messages=self._compose_messages(knowledge_context),
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
             )

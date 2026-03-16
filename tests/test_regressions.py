@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import sys
 import types
@@ -12,6 +13,7 @@ sys.modules.setdefault("dotenv", dotenv_stub)
 
 rich_stub = types.ModuleType("rich")
 rich_console_stub = types.ModuleType("rich.console")
+rich_markdown_stub = types.ModuleType("rich.markdown")
 rich_panel_stub = types.ModuleType("rich.panel")
 rich_prompt_stub = types.ModuleType("rich.prompt")
 
@@ -26,6 +28,11 @@ class _DummyPanel:
         pass
 
 
+class _DummyMarkdown:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
 class _DummyPrompt:
     @staticmethod
     def ask(*args, **kwargs):
@@ -33,16 +40,42 @@ class _DummyPrompt:
 
 
 rich_console_stub.Console = _DummyConsole
+rich_markdown_stub.Markdown = _DummyMarkdown
 rich_panel_stub.Panel = _DummyPanel
 rich_prompt_stub.Prompt = _DummyPrompt
 sys.modules.setdefault("rich", rich_stub)
 sys.modules.setdefault("rich.console", rich_console_stub)
+sys.modules.setdefault("rich.markdown", rich_markdown_stub)
 sys.modules.setdefault("rich.panel", rich_panel_stub)
 sys.modules.setdefault("rich.prompt", rich_prompt_stub)
 
-from agent import config_manager, tool_definitions
-from tools import circuit_tools, coupling_tools, dynamic_reporting_tools, fluent_tools, icepak_tools, mapdl_tools, maxwell_tools, mechanical_tools, motorcad_tools, project_tools, report_tools, rmxprt_tools, sweep_tools
+openai_stub = types.ModuleType("openai")
+
+
+class _DummyOpenAI:
+    def __init__(self, *args, **kwargs):
+        self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=lambda **kw: None))
+
+
+class _DummyRateLimitError(Exception):
+    pass
+
+
+class _DummyAPIStatusError(Exception):
+    def __init__(self, *args, status_code=None, **kwargs):
+        super().__init__(*args)
+        self.status_code = status_code
+
+
+openai_stub.OpenAI = _DummyOpenAI
+openai_stub.RateLimitError = _DummyRateLimitError
+openai_stub.APIStatusError = _DummyAPIStatusError
+sys.modules.setdefault("openai", openai_stub)
+
+from agent import chat_agent, config_manager, tool_definitions
+from tools import circuit_tools, coupling_tools, dynamic_reporting_tools, fluent_tools, icepak_tools, knowledge_tools, mapdl_tools, maxwell_tools, mechanical_tools, motorcad_tools, project_tools, report_tools, rmxprt_tools, sweep_tools
 from tools import result_tools, utils as tool_utils, visualization_tools
+from rag import ingest as rag_ingest
 
 
 class DummySolutionData:
@@ -357,6 +390,74 @@ class RegressionTests(unittest.TestCase):
             cfg = config_manager.load_llm_config()
         self.assertEqual(cfg.provider, "gemini")
         self.assertEqual(cfg.api_key, "AIzaSyCKqwy6JrrhnPq0tGRvvfiQLN1MTbQsgqo")
+
+    def test_build_knowledge_index_creates_local_index(self):
+        knowledge_file = Path("/tmp/ansysagent_rag_test.md")
+        knowledge_file.write_text("Maxwell transient setup requires winding definition.", encoding="utf-8")
+        result = knowledge_tools.build_knowledge_index(doc_paths=[str(knowledge_file)])
+        self.assertTrue(result["success"])
+        self.assertGreaterEqual(result["result"]["num_chunks"], 1)
+        self.assertTrue(Path(result["result"]["index_path"]).exists())
+
+    def test_search_official_docs_returns_relevant_chunk(self):
+        knowledge_file = Path("/tmp/ansysagent_rag_search.md")
+        knowledge_file.write_text("Back EMF extraction requires transient solution in Maxwell.", encoding="utf-8")
+        build = knowledge_tools.build_knowledge_index(doc_paths=[str(knowledge_file)])
+        self.assertTrue(build["success"])
+        result = knowledge_tools.search_official_docs("back emf transient maxwell", top_k=3)
+        self.assertTrue(result["success"])
+        self.assertGreaterEqual(len(result["result"]["results"]), 1)
+        self.assertIn("Back EMF", result["result"]["results"][0]["snippet"])
+
+    def test_discover_documents_skips_hidden_files(self):
+        hidden_dir = Path("/tmp/ansysagent_hidden_docs")
+        hidden_dir.mkdir(exist_ok=True)
+        (hidden_dir / ".DS_Store").write_text("ignore", encoding="utf-8")
+        (hidden_dir / "visible.md").write_text("visible", encoding="utf-8")
+        documents = rag_ingest.discover_documents([hidden_dir])
+        self.assertEqual([hidden_dir / "visible.md"], documents)
+
+    def test_build_knowledge_index_reads_notebook_cells(self):
+        notebook_file = Path("/tmp/ansysagent_notebook.ipynb")
+        notebook_file.write_text(json.dumps({
+            "cells": [
+                {"cell_type": "markdown", "source": ["# Maxwell\n", "Transient setup\n"]},
+                {"cell_type": "code", "source": ["print('back emf')\n"]},
+            ]
+        }), encoding="utf-8")
+        result = knowledge_tools.build_knowledge_index(doc_paths=[str(notebook_file)])
+        self.assertTrue(result["success"])
+        search = knowledge_tools.search_official_docs("back emf", top_k=3)
+        self.assertTrue(search["success"])
+        self.assertGreaterEqual(len(search["result"]["results"]), 1)
+
+    def test_chat_agent_injects_knowledge_context_for_doc_question(self):
+        agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)
+        agent.history = [{"role": "user", "content": "back emf 怎么提取"}]
+        agent._knowledge_index_ready = True
+        with patch("agent.chat_agent.search_index", return_value={
+            "results": [{
+                "source_type": "api",
+                "title": "PyAEDT Maxwell",
+                "path": "/tmp/api.md",
+                "score": 9.1,
+                "snippet": "Back EMF requires transient solution.",
+            }]
+        }):
+            context = agent._build_knowledge_context("back emf 怎么提取")
+            messages = agent._compose_messages(context)
+        self.assertIn("Back EMF requires transient solution", context)
+        self.assertEqual(messages[1]["role"], "system")
+        self.assertIn("PyAEDT Maxwell", messages[1]["content"])
+
+    def test_chat_agent_skips_knowledge_context_for_execution_request(self):
+        agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)
+        agent.history = [{"role": "user", "content": "帮我运行 transient 仿真"}]
+        agent._knowledge_index_ready = True
+        context = agent._build_knowledge_context("帮我运行 transient 仿真")
+        messages = agent._compose_messages(context)
+        self.assertEqual(context, "")
+        self.assertEqual(len(messages), 2)
 
     def test_list_designs_accepts_design_list_property(self):
         app = DummyProjectApp(["Design1", "Design2"])

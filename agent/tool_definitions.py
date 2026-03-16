@@ -24,6 +24,7 @@ from tools import (
     mapdl_tools,
     dpf_tools,
     dynamic_reporting_tools,
+    knowledge_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -153,6 +154,9 @@ TOOL_REGISTRY: dict[str, callable] = {
     "add_table_to_report": dynamic_reporting_tools.add_table_to_report,
     "add_image_to_report": dynamic_reporting_tools.add_image_to_report,
     "export_report": dynamic_reporting_tools.export_report,
+    # 本地知识检索工具
+    "build_knowledge_index": knowledge_tools.build_knowledge_index,
+    "search_official_docs": knowledge_tools.search_official_docs,
 }
 
 # ---------------------------------------------------------------------------
@@ -160,6 +164,36 @@ TOOL_REGISTRY: dict[str, callable] = {
 # ---------------------------------------------------------------------------
 
 TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "build_knowledge_index",
+            "description": "构建本地知识索引，供 RAG 检索使用；可索引 docs/api 和后续补充的 knowledge 文档。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc_paths": {"type": "array", "items": {"type": "string"}, "description": "要索引的目录或文件路径列表；留空则使用默认知识目录"},
+                    "force_rebuild": {"type": "boolean", "description": "是否强制重建索引，默认 True"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_official_docs",
+            "description": "在本地知识索引中检索官方或内部文档片段，适合 API 用法、报错解释和推荐 workflow 问题。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "检索问题或关键词"},
+                    "top_k": {"type": "integer", "description": "返回结果条数，默认 5"},
+                    "source_type": {"type": "string", "description": "可选过滤类型，如 api/manual/faq/workflow"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
