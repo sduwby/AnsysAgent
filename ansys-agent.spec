@@ -26,24 +26,39 @@ a = Analysis(
     datas=[
         # gpt_tokenizer 词表数据
         *gpt_tokenizer_datas,
-        # .env 内置配置（含 API Key），打包时自动打入；{tmp}/.AnsysAgent/.env 优先级更高
+        # .env 内置配置（含 API Key），打包时自动打入；{ANSYS_DATA_DIR}/.env 优先级更高
         (".env", "."),
         # .env.example 供用户参考
         (".env.example", "."),
         # 内置 API 速查表文档（开箱即用，只读）
         ("docs/api", "docs/api"),
         # 内置官方知识库（开箱即用，只读）
-        # 用户自定义知识请放在 {tmp}/.AnsysAgent/ 目录
+        # 用户自定义知识请放在 {ANSYS_DATA_DIR}/knowledge/ 目录
         ("knowledge", "knowledge"),
         # 内置技能（开箱即用，只读）
-        # 用户自定义技能请放在 {tmp}/.AnsysAgent/skills/ 目录
+        # 用户自定义技能请放在 {ANSYS_DATA_DIR}/skills/ 目录
         ("skills", "skills"),
     ],
     hiddenimports=[
         "agent.chat_agent",
+        "agent.dispatcher",
+        "agent.mcp_manager",
         "agent.prompt",
+        "agent.role_manager",
+        "agent.skill_manager",
+        "agent.sub_agents",
+        "agent.sub_agents.maxwell_agent",
+        "agent.sub_agents.icepak_agent",
+        "agent.sub_agents.fluent_agent",
+        "agent.sub_agents.mapdl_agent",
+        "agent.sub_agents.motorcad_agent",
+        "agent.sub_agents.optimization_agent",
+        "agent.sub_agents.reporting_agent",
         "tools.maxwell_tools",
         "tools.result_tools",
+        "tools.skill_tools",
+        "mcp",
+        "duckduckgo_mcp_server",
         "openai",
         "rich",
         "click",

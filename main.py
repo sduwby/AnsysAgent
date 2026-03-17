@@ -26,7 +26,7 @@ def _find_env_path() -> Path:
     定位 .env 文件路径，兼容开发模式和 PyInstaller 打包模式。
 
     优先级（从高到低）：
-      1. {tmp}/.AnsysAgent/.env  —— 用户通过 /config 保存的配置（可写，跨模式统一）
+      1. {ANSYS_DATA_DIR}/.env  —— 用户通过 /config 保存的配置（可写，跨模式统一）
       2. 打包内置 _MEIPASS/.env  —— 随包附带的默认配置（只读，fallback）
       3. 项目根目录 .env        —— 开发模式 fallback
     """
@@ -311,7 +311,7 @@ def _show_help(console: Console) -> None:
     console.print(Panel(
         "  自动检索本地知识文档辅助 AI 回答 API 用法、错误处理、仿真步骤等\n"
         "  内置文档：[dim]docs/api/[/dim]（API 速查表）、[dim]knowledge/official/[/dim]（官方教程）\n"
-        "  自定义文档：将 PDF / PPTX / IPYNB 等放入 [dim]knowledge/internal/[/dim]\n"
+        f"  自定义文档：将 PDF / PPTX / IPYNB 等放入 [dim]{data_dir}/knowledge/internal/[/dim]\n"
         '              然后告诉 AI "重建知识索引"\n'
         f"  索引缓存：[dim]{data_dir}/.rag/keyword_index.json[/dim]\n"
         "  （删除缓存文件可强制从头重建索引）",
