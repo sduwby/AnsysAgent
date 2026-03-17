@@ -1,14 +1,12 @@
 """
 AnsysAgent 日志模块
-- 按天轮转写入本地文件（logs/ansys_agent_YYYY-MM-DD.log）
-- 开发模式：./logs/，打包模式：<exe同级>/logs/
+- 按天轮转写入本地文件（{ANSYS_DATA_DIR}/logs/ansys_agent.log）
 - 调用 get_logger(name) 获取带名称前缀的子 logger
 """
 
 from __future__ import annotations
 
 import logging
-import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -17,11 +15,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def _resolve_log_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        # 打包模式：放在 exe 同级目录
-        log_dir = Path(sys.executable).parent / "logs"
-    else:
-        log_dir = Path(".") / "logs"
+    from agent.paths import ANSYS_DATA_DIR
+    log_dir = ANSYS_DATA_DIR / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

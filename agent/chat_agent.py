@@ -18,7 +18,7 @@ from rich.panel import Panel
 
 from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get_provider_api_key
 from agent.prompt import SYSTEM_PROMPT
-from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION
+from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
 from agent.logger import get_logger
 from agent import dispatcher
 from agent.sub_agents import (
@@ -354,8 +354,8 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(user_message)
 
-        # Main-Agent 工具：delegate_to_agent + 跨软件协调工具 + 知识工具
-        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS
+        # Main-Agent 工具：delegate_to_agent + 跨软件协调工具 + 知识工具 + 技能工具（动态）
+        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()]
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
@@ -415,7 +415,7 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(user_message)
 
-        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS
+        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()]
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)

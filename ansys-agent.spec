@@ -26,15 +26,18 @@ a = Analysis(
     datas=[
         # gpt_tokenizer 词表数据
         *gpt_tokenizer_datas,
-        # .env 内置配置（含 API Key），打包时自动打入；exe 同级目录的 .env 优先级更高
+        # .env 内置配置（含 API Key），打包时自动打入；{tmp}/.AnsysAgent/.env 优先级更高
         (".env", "."),
         # .env.example 供用户参考
         (".env.example", "."),
         # 内置 API 速查表文档（开箱即用，只读）
         ("docs/api", "docs/api"),
         # 内置官方知识库（开箱即用，只读）
-        # 用户自定义知识请放在 exe 同级的 knowledge/ 目录
+        # 用户自定义知识请放在 {tmp}/.AnsysAgent/ 目录
         ("knowledge", "knowledge"),
+        # 内置技能（开箱即用，只读）
+        # 用户自定义技能请放在 {tmp}/.AnsysAgent/skills/ 目录
+        ("skills", "skills"),
     ],
     hiddenimports=[
         "agent.chat_agent",

@@ -24,18 +24,17 @@ def _find_env_path() -> Path:
     """
     定位 .env 文件路径，兼容开发模式和 PyInstaller 打包模式。
 
-    - 打包模式（sys.frozen=True）：PyInstaller 将数据文件解压到 sys._MEIPASS，
-      优先从该目录加载；若不存在则回退到 exe 同级目录（用户自定义覆盖）。
-    - 开发模式：直接使用当前工作目录下的 .env。
+    优先级（从高到低）：
+      1. {tmp}/.AnsysAgent/.env  —— 用户通过 /config 保存的配置（可写，跨模式统一）
+      2. 打包内置 _MEIPASS/.env  —— 随包附带的默认配置（只读，fallback）
+      3. 项目根目录 .env        —— 开发模式 fallback
     """
+    from agent.paths import ANSYS_DATA_DIR
+    user_env = ANSYS_DATA_DIR / ".env"
+    if user_env.exists():
+        return user_env
     if getattr(sys, "frozen", False):
-        # 打包模式：先检查 exe 同级目录（允许用户覆盖），再用内置的
-        exe_dir = Path(sys.executable).parent
-        user_env = exe_dir / ".env"
-        if user_env.exists():
-            return user_env
-        # 回退到打包内置的 .env（解压到临时目录）
-        bundled_env = Path(sys._MEIPASS) / ".env"
+        bundled_env = Path(sys._MEIPASS) / ".env"  # type: ignore[attr-defined]
         if bundled_env.exists():
             return bundled_env
     # 开发模式：当前目录

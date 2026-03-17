@@ -25,6 +25,7 @@ from tools import (
     dpf_tools,
     dynamic_reporting_tools,
     knowledge_tools,
+    skill_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -157,6 +158,8 @@ TOOL_REGISTRY: dict[str, callable] = {
     # 本地知识检索工具
     "build_knowledge_index": knowledge_tools.build_knowledge_index,
     "search_official_docs": knowledge_tools.search_official_docs,
+    # 技能加载工具
+    "use_skill": skill_tools.use_skill,
 }
 
 # ---------------------------------------------------------------------------
@@ -1969,11 +1972,12 @@ _REPORTING_TOOL_NAMES: frozenset[str] = frozenset({
     "add_image_to_report", "export_report",
 })
 
-# Main-Agent 保留的工具（跨软件协调 + 知识检索）
+# Main-Agent 保留的工具（跨软件协调 + 知识检索 + 技能加载）
 _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
     "save_project", "open_project", "close_project", "list_designs", "copy_design",
     "build_knowledge_index", "search_official_docs",
+    "use_skill",
 })
 
 
@@ -2009,6 +2013,51 @@ REPORTING_TOOL_REGISTRY = _filter_registry(_REPORTING_TOOL_NAMES)
 
 MAIN_TOOL_DEFINITIONS = _filter_definitions(_MAIN_TOOL_NAMES)
 MAIN_TOOL_REGISTRY = _filter_registry(_MAIN_TOOL_NAMES)
+
+
+def build_use_skill_definition() -> dict:
+    """
+    动态构建 use_skill 工具定义，description 中包含当前可用技能列表。
+    在每次 LLM 调用前动态生成，确保 LLM 获知最新技能列表。
+    """
+    from agent.skill_manager import SkillManager
+    skills = SkillManager.get_instance().get_available_skills()
+
+    if not skills:
+        description = (
+            "加载专业领域技能指南，获取特定仿真任务的详细步骤和工作流程。"
+            "当前没有可用技能。"
+        )
+        enum_values: list[str] = []
+    else:
+        skill_list = "\n".join(f"  - {s.name}: {s.description}" for s in skills)
+        description = (
+            "加载专业领域技能指南，获取特定仿真任务的详细操作步骤和工作流程。\n\n"
+            "IMPORTANT: 只能使用下列技能，加载后严格按照技能内容执行。\n\n"
+            f"当前可用技能：\n{skill_list}"
+        )
+        enum_values = [s.name for s in skills]
+
+    skill_name_schema: dict = {
+        "type": "string",
+        "description": "要加载的技能名称",
+    }
+    if enum_values:
+        skill_name_schema["enum"] = enum_values
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "use_skill",
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {"skill_name": skill_name_schema},
+                "required": ["skill_name"],
+            },
+        },
+    }
+
 
 # delegate_to_agent 的 OpenAI function calling 定义（由 MainAgent 使用）
 DELEGATE_TOOL_DEFINITION = {
