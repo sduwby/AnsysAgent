@@ -6,11 +6,12 @@ AnsysAgent 统一数据目录。
 
 目录结构：
   {ANSYS_DATA_DIR}/
-    .env              ← LLM 配置（API Key、模型等）
-    .rag/             ← RAG 关键词索引
-    logs/             ← 运行日志
-    skills/           ← 用户自定义技能（SKILL.md）
-    roles/            ← 用户自定义角色（*.md，最多 5 个，每个最多 200 行）
+    .env                  ← LLM 配置（API Key、模型等）
+    .rag/                 ← RAG 关键词索引
+    logs/                 ← 运行日志
+    skills/               ← 用户自定义技能（SKILL.md）
+    roles/                ← 用户自定义角色（*.md，最多 5 个，每个最多 200 行）
+    mcp_servers.json      ← MCP server 配置（首次运行自动生成含 DuckDuckGo 默认配置）
 """
 
 from __future__ import annotations

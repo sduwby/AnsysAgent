@@ -31,3 +31,9 @@ rich>=13.0.0          # 终端格式化输出
 
 # PDF 文本提取（RAG 知识索引可选依赖）
 pypdf>=4.2.0
+
+# MCP (Model Context Protocol) 客户端 SDK
+mcp>=1.0.0
+
+# 默认内置 MCP server：DuckDuckGo web search（免费，无需 API Key）
+duckduckgo-mcp-server>=0.1.0

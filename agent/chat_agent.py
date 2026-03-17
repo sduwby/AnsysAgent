@@ -22,6 +22,7 @@ from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DE
 from agent.logger import get_logger
 from agent import dispatcher
 from agent.role_manager import RoleManager
+from agent.mcp_manager import MCPManager
 from agent.sub_agents import (
     MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
     MotorCADAgent, OptimizationAgent, ReportingAgent,
@@ -131,6 +132,8 @@ class ChatAgent:
         self._knowledge_index_ready = False
         self._prepare_knowledge_index()
         self._init_sub_agents()
+        # 初始化 MCP 管理器（优雅降级：若 mcp 包未安装则跳过）
+        self._mcp: MCPManager = MCPManager()
 
     def _init_sub_agents(self) -> None:
         """初始化并注册所有 Sub-Agent（复用 MainAgent 的 LLM 客户端和 fallback 链）。"""
@@ -338,6 +341,11 @@ class ChatAgent:
             )
             return json.dumps(result, ensure_ascii=False)
 
+        # MCP 工具：转发给 MCPManager
+        if self._mcp.has_tool(tool_name):
+            _log.info("调用 MCP 工具: %s", tool_name)
+            return self._mcp.call_tool(tool_name, tool_input)
+
         # Main-Agent 自有工具
         fn = MAIN_TOOL_REGISTRY.get(tool_name)
         if fn is None:
@@ -363,7 +371,7 @@ class ChatAgent:
         knowledge_context = self._build_knowledge_context(user_message)
 
         # Main-Agent 工具：delegate_to_agent + 跨软件协调工具 + 知识工具 + 技能工具（动态）
-        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()]
+        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
@@ -423,7 +431,7 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(user_message)
 
-        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()]
+        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
