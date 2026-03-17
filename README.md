@@ -7,16 +7,19 @@
 
 ---
 
-基于多 LLM 提供商 + PyAEDT / PyFluent / PyMotorCAD / PyMAPDL 的电机全流程仿真 AI 助手，覆盖从解析法快速初设计到电磁、热、流体、结构、NVH、驱动器联仿、参数优化和自动化报告的完整端到端自动化流水线。
+基于多 LLM 提供商 + 多 Agent 调度 + PyAEDT / PyFluent / PyMotorCAD / PyMAPDL 的电机全流程仿真 AI 助手，覆盖从解析法快速初设计到电磁、热、流体、结构、NVH、驱动器联仿、参数优化和自动化报告的完整端到端自动化流水线。
 
 ## 功能特性
 
-- **自然语言驱动**：用中文描述需求，Agent 自动调用 Ansys 工具执行
+- **自然语言驱动**：用中文描述需求，Main Agent 自动路由到专业 Sub-Agent 执行
 - **多 LLM 提供商**：运行时通过 `/config` 切换 DeepSeek / ChatGPT / Qwen / Gemini / GLM / MiniMax，并支持自动故障回退
+- **多 Agent 架构**：内置 `maxwell` / `icepak` / `fluent` / `mapdl` / `motorcad` / `optimization` / `reporting` 七类专业代理
 - **多轮对话**：完整上下文保持，支持追加修改
 - **流式输出**：实时显示回复内容，工具调用实时可见
-- **模块化工具**：92 个工具覆盖电机仿真全流程，支持全自动化运行
-- **本地知识增强（RAG）**：自动索引 `docs/api`、`knowledge/official`、`knowledge/internal` 目录，支持 PDF / PPTX / Notebook / Python / Markdown 等格式，回答问题时优先检索本地文档片段作为参考
+- **模块化工具**：92+ 内置工具覆盖电机仿真全流程，并支持通过 MCP 动态扩展额外工具
+- **本地知识增强（RAG）**：自动索引内置文档和用户扩展知识目录，支持 PDF / PPTX / Notebook / Python / Markdown 等格式
+- **技能与角色**：支持 `/roles` 管理自定义系统角色，并支持 `skills/` 目录下的专业流程技能
+- **统一数据目录**：配置、日志、角色、技能、知识索引、MCP 配置统一写入 `ANSYS_DATA_DIR`
 
 ## 完整仿真流水线
 
@@ -112,6 +115,38 @@ ansys-agent -p "帮我建一个 36 槽 6 极 PMSM，外径 150mm"
 ansys-agent --version
 ```
 
+### 内置命令
+
+- `/help`：显示功能帮助
+- `/config`：配置 LLM 提供商、API Key 和模型
+- `/roles`：管理用户自定义角色（最多 5 个，每个最多 200 行）
+- `/exit` / `/quit`：退出程序
+
+### 运行时数据目录
+
+运行时可写数据统一保存在 `ANSYS_DATA_DIR`：
+
+- 优先使用环境变量 `ANSYS_AGENT_HOME`
+- 默认回退到 `~/.AnsysAgent`
+
+目录结构示例：
+
+```text
+~/.AnsysAgent/
+├── .env
+├── .rag/
+│   └── keyword_index.json
+├── knowledge/
+│   ├── official/
+│   └── internal/
+├── logs/
+├── roles/
+├── skills/
+└── mcp_servers.json
+```
+
+这意味着项目目录和打包后的 exe 同级目录都不再承担运行时写入职责。
+
 ### 切换 LLM 提供商
 
 在对话中输入 `/config` 启动配置向导：
@@ -156,25 +191,47 @@ You: 对气隙宽度做多目标优化，生成完整分析报告
 
 ## 本地知识库（RAG）
 
-Agent 启动时会自动扫描以下目录，构建关键词索引（存储于 `.rag/keyword_index.json`）：
+Agent 启动时会自动扫描以下目录，并将关键词索引写入 `ANSYS_DATA_DIR/.rag/keyword_index.json`：
 
 | 目录 | 用途 | 来源类型标签 |
 |------|------|------------|
 | `docs/api/` | Ansys Python 库 API 速查表 PDF | `api` |
 | `knowledge/official/` | Ansys 官方教程、课件、手册 | `official` |
-| `knowledge/internal/` | 内部经验文档、自定义知识 | `internal` |
+| `knowledge/internal/` | 项目内内置内部文档 | `internal` |
+| `~/.AnsysAgent/knowledge/official/` | 用户追加的官方文档 | `official` |
+| `~/.AnsysAgent/knowledge/internal/` | 用户自定义经验文档、内部知识 | `internal` |
 
 **支持的文件格式**：`.pdf`、`.pptx`、`.ipynb`、`.py`、`.md`、`.txt`、`.rst`
 
 **首次使用 / 更新文档后**，删除旧 index 并重启 agent 触发重建：
 
 ```bash
-rm .rag/keyword_index.json   # macOS / Linux
-del .rag\keyword_index.json  # Windows
+rm ~/.AnsysAgent/.rag/keyword_index.json   # macOS / Linux
+del %USERPROFILE%\.AnsysAgent\.rag\keyword_index.json  # Windows
 ansys-agent                  # 重启后自动重建
 ```
 
-> `.rag/` 目录已加入 `.gitignore`，不会提交至版本库。
+如需自定义目录，可先设置 `ANSYS_AGENT_HOME`。
+
+## Skill / Role / MCP
+
+### Role
+
+- 通过 `/roles` 交互式管理角色
+- 角色文件保存在 `ANSYS_DATA_DIR/roles/`
+- 每次对话前会动态注入到 system prompt
+
+### Skill
+
+- 内置技能随项目和打包文件分发
+- 用户自定义技能放在 `ANSYS_DATA_DIR/skills/<skill-name>/SKILL.md`
+- Agent 会在对话中按需调用 `use_skill`
+
+### MCP
+
+- MCP server 配置文件位于 `ANSYS_DATA_DIR/mcp_servers.json`
+- 首次运行会自动生成默认配置
+- 若安装了 `mcp` 和对应 server，MCP 工具会自动注册为可调用工具
 
 ## 打包（可执行文件）
 
@@ -184,17 +241,20 @@ build.bat
 # 输出：dist\ansys-agent.exe
 ```
 
-打包时会自动将 `docs/api/` 和 `knowledge/` 目录内置到 exe 中，无需额外分发知识文件。
+打包时会自动将 `docs/api/`、`knowledge/`、`skills/` 目录内置到 exe 中，无需额外分发这些只读资源。
 
 ### 打包版知识库扩展
 
 | 目录位置 | 说明 |
 |---------|------|
 | exe 内置（只读）| 打包时固化的 `docs/api` 和 `knowledge/official` 文件，随 exe 分发 |
-| `<exe所在目录>/knowledge/official/` | 用户可在此放置额外的官方文档 |
-| `<exe所在目录>/knowledge/internal/` | 用户自定义经验文档、内部知识 |
+| `ANSYS_DATA_DIR/knowledge/official/` | 用户可在此放置额外的官方文档 |
+| `ANSYS_DATA_DIR/knowledge/internal/` | 用户自定义经验文档、内部知识 |
+| `ANSYS_DATA_DIR/skills/` | 用户自定义技能目录 |
+| `ANSYS_DATA_DIR/roles/` | 用户自定义角色目录 |
+| `ANSYS_DATA_DIR/.env` | 用户覆盖的 LLM 配置 |
 
-添加新文件后，删除 `.rag/keyword_index.json` 并重启 agent 即可触发重建，内置知识与自定义知识将同时生效。
+添加新文件后，删除 `ANSYS_DATA_DIR/.rag/keyword_index.json` 并重启 agent 即可触发重建，内置知识与自定义知识将同时生效。
 
 ## 目录结构
 
@@ -202,10 +262,16 @@ build.bat
 AnsysAgent/
 ├── main.py                        # CLI 入口（含 /config 向导）
 ├── agent/
-│   ├── chat_agent.py              # 对话主循环（流式 + 工具调用 + 自动回退）
+│   ├── chat_agent.py              # Main Agent（流式 + 工具调用 + 自动回退）
 │   ├── config_manager.py          # 多提供商 LLM 配置管理
-│   ├── tool_definitions.py        # 工具注册表（92 个）+ OpenAI function calling 定义
-│   └── prompt.py                  # System prompt
+│   ├── dispatcher.py              # Sub-Agent 分发器
+│   ├── mcp_manager.py             # MCP 工具注册与调用
+│   ├── paths.py                   # 统一运行时数据目录
+│   ├── role_manager.py            # Role 管理
+│   ├── skill_manager.py           # Skill 扫描与加载
+│   ├── tool_definitions.py        # 工具注册表 + OpenAI function calling 定义
+│   ├── prompt.py                  # Main Agent system prompt
+│   └── sub_agents/                # Maxwell/Icepak/Fluent/... 专业代理
 ├── tools/
 │   ├── maxwell_tools.py           # 电磁仿真（含自定义材料/B-H曲线）
 │   ├── result_tools.py            # 结果提取（动态报告类别，含退磁校核）
@@ -225,7 +291,10 @@ AnsysAgent/
 │   ├── mapdl_tools.py             # MAPDL 结构强度/NVH（PyMAPDL）
 │   ├── dpf_tools.py               # 仿真结果后处理（PyDPF-Post）
 │   ├── dynamic_reporting_tools.py # 自动化报告生成（ADR/HTML 双轨）
+│   ├── knowledge_tools.py         # 本地知识索引与检索
+│   ├── skill_tools.py             # Skill 加载工具
 │   └── utils.py                   # 共享辅助函数（_ok / _err）
+├── skills/                        # 内置技能
 ├── docs/api/                      # Ansys Python 库 API 速查表 PDF
 ├── knowledge/
 │   ├── official/                  # Ansys 官方教程、课件、手册（PDF / PPTX / ipynb）
@@ -235,7 +304,6 @@ AnsysAgent/
 │   ├── ingest.py                  # 文档解析与 chunk 切分
 │   ├── retriever.py               # 关键词检索（BM25-like）
 │   └── service.py                 # index 构建 / 加载 / 检索服务（含内存缓存）
-├── .rag/                          # 运行时生成的 index 文件（已 .gitignore）
 ├── requirements.txt               # Python 依赖列表
 ├── build.bat                      # Windows 打包脚本
 └── ansys-agent.spec               # PyInstaller 配置
@@ -250,4 +318,6 @@ AnsysAgent/
 - `dynamic_reporting_tools` 在无 ADR 许可证时自动回退到内置 HTML 模板渲染，无需额外依赖
 - Claude (Anthropic) 因 API 格式不兼容 OpenAI 客户端已移除，如需使用请自行实现 Anthropic 适配层
 - 首次运行仿真前需确保对应 Ansys 软件已启动并处于就绪状态
-- RAG 知识索引（`.rag/`）为运行时自动生成文件，不提交至版本库；向 `knowledge/` 添加新文档后需删除旧 index 并重启 agent 触发重建
+- 运行时文件统一位于 `ANSYS_DATA_DIR`；如需自定义位置，请设置环境变量 `ANSYS_AGENT_HOME`
+- RAG 知识索引位于 `ANSYS_DATA_DIR/.rag/keyword_index.json`；向用户知识目录添加新文档后需删除旧 index 并重启 agent 触发重建
+- MCP 依赖为可选；未安装 `mcp` 或对应 MCP server 时会自动降级，不影响主流程
