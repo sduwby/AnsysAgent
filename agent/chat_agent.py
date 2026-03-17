@@ -21,6 +21,7 @@ from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
 from agent.logger import get_logger
 from agent import dispatcher
+from agent.role_manager import RoleManager
 from agent.sub_agents import (
     MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
     MotorCADAgent, OptimizationAgent, ReportingAgent,
@@ -203,6 +204,13 @@ class ChatAgent:
 
     def _compose_messages(self, knowledge_context: str = "") -> list[dict]:
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # 注入用户 roles（每次对话前动态加载，支持会话中 /roles 热修改后立即生效）
+        try:
+            roles_prompt = RoleManager().get_roles_prompt()
+            if roles_prompt:
+                messages.append({"role": "system", "content": roles_prompt})
+        except Exception as e:
+            _log.warning("加载 roles 失败，跳过: %s", e)
         if knowledge_context:
             messages.append({"role": "system", "content": knowledge_context})
         messages.extend(self.history)

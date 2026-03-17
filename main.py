@@ -18,6 +18,7 @@ from rich.text import Text
 
 from agent.config_manager import run_config_wizard
 from agent.logger import setup_logging, get_logger
+from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
 
 
 def _find_env_path() -> Path:
@@ -109,8 +110,223 @@ WELCOME = (
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  输入 /config 修改 LLM 配置 | 输入 /exit 或按 Ctrl+C 退出[/dim]"
+    "  /help 查看帮助 | /config 配置 LLM | /roles 管理角色 | /exit 退出[/dim]"
 )
+
+
+# ---------------------------------------------------------------------------
+# Roles 向导
+# ---------------------------------------------------------------------------
+
+def _read_multiline_content(console: Console, prompt_hint: str = "") -> str:
+    """
+    交互式读取多行内容。
+    用户输入完毕后，在空行连续按两次 Enter（即输入一个空行后再 Enter）结束。
+    返回完整内容字符串。
+    """
+    if prompt_hint:
+        console.print(f"[dim]{prompt_hint}[/dim]")
+    console.print("[dim]逐行输入内容，完成后连续按两次 Enter 结束：[/dim]")
+    lines: list[str] = []
+    prev_empty = False
+    while True:
+        try:
+            line = input()
+        except (KeyboardInterrupt, EOFError):
+            break
+        if line == "":
+            if prev_empty:
+                break  # 连续两次空行 → 结束
+            prev_empty = True
+        else:
+            if prev_empty:
+                lines.append("")  # 保留中间的单个空行
+            prev_empty = False
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def run_roles_wizard(console: Console) -> None:
+    """
+    Rich 交互式 Roles 管理向导。
+    支持：列表查看、添加、删除、修改。
+    """
+    rm = RoleManager()
+
+    while True:
+        roles = rm.list_roles()
+
+        # ── 显示当前 roles ─────────────────────────────────────────────
+        if roles:
+            role_lines = "\n".join(
+                f"  [{i+1}] {name}  ({len((rm.get_role(name) or '').splitlines())} 行)"
+                for i, name in enumerate(roles)
+            )
+        else:
+            role_lines = "  （暂无 role）"
+
+        console.print(Panel(
+            role_lines,
+            title=f"当前 Roles（{len(roles)}/{MAX_ROLES}）",
+            border_style="blue",
+        ))
+
+        # ── 操作菜单 ──────────────────────────────────────────────────
+        console.print("\n[bold]选择操作[/bold]（Enter 退出）:")
+        console.print("  [1] 查看 role 内容")
+        console.print("  [2] 添加新 role")
+        console.print("  [3] 修改已有 role")
+        console.print("  [4] 删除 role")
+
+        choice = Prompt.ask("  操作编号", default="").strip()
+
+        if choice == "":
+            break
+
+        # ── [1] 查看 ──────────────────────────────────────────────────
+        if choice == "1":
+            if not roles:
+                console.print("[yellow]  暂无 role 可查看[/yellow]")
+                continue
+            name = Prompt.ask("  输入 role 名称").strip()
+            content = rm.get_role(name)
+            if content is None:
+                console.print(f"[red]  Role '{name}' 不存在[/red]")
+            else:
+                console.print(Panel(content, title=f"Role: {name}", border_style="dim"))
+
+        # ── [2] 添加 ──────────────────────────────────────────────────
+        elif choice == "2":
+            if len(roles) >= MAX_ROLES:
+                console.print(f"[red]  已达到最大数量（{MAX_ROLES} 个），请先删除一个[/red]")
+                continue
+            name = Prompt.ask("  新 role 名称").strip()
+            if not name:
+                console.print("[yellow]  名称不能为空[/yellow]")
+                continue
+            content = _read_multiline_content(
+                console,
+                f"请输入 role 内容（最多 {MAX_LINES} 行）："
+            )
+            if not content:
+                console.print("[yellow]  内容为空，已取消[/yellow]")
+                continue
+            ok, msg = rm.add_role(name, content)
+            color = "green" if ok else "red"
+            console.print(f"[{color}]  {msg}[/{color}]")
+
+        # ── [3] 修改 ──────────────────────────────────────────────────
+        elif choice == "3":
+            if not roles:
+                console.print("[yellow]  暂无 role 可修改[/yellow]")
+                continue
+            name = Prompt.ask("  要修改的 role 名称").strip()
+            existing = rm.get_role(name)
+            if existing is None:
+                console.print(f"[red]  Role '{name}' 不存在[/red]")
+                continue
+            console.print(f"[dim]当前内容（{len(existing.splitlines())} 行），下面输入新内容：[/dim]")
+            content = _read_multiline_content(
+                console,
+                f"请输入新内容（最多 {MAX_LINES} 行）："
+            )
+            if not content:
+                console.print("[yellow]  内容为空，已取消[/yellow]")
+                continue
+            ok, msg = rm.update_role(name, content)
+            color = "green" if ok else "red"
+            console.print(f"[{color}]  {msg}[/{color}]")
+
+        # ── [4] 删除 ──────────────────────────────────────────────────
+        elif choice == "4":
+            if not roles:
+                console.print("[yellow]  暂无 role 可删除[/yellow]")
+                continue
+            name = Prompt.ask("  要删除的 role 名称").strip()
+            confirm = Prompt.ask(f"  确认删除 '{name}'？(y/N)", default="n").strip().lower()
+            if confirm == "y":
+                ok, msg = rm.delete_role(name)
+                color = "green" if ok else "red"
+                console.print(f"[{color}]  {msg}[/{color}]")
+            else:
+                console.print("[dim]  已取消[/dim]")
+
+        else:
+            console.print("[yellow]  无效选项[/yellow]")
+
+
+def _show_help(console: Console) -> None:
+    """用多块彩色 Panel 展示功能指南，风格与 /config 一致。"""
+    from agent.paths import ANSYS_DATA_DIR
+
+    data_dir = str(ANSYS_DATA_DIR)
+
+    # ── 标题 ──────────────────────────────────────────────────────────────
+    console.print(Panel(
+        "[bold cyan]AnsysAgent 功能指南[/bold cyan]\n"
+        "[dim]输入对应命令进入交互向导，或直接用自然语言描述仿真需求。[/dim]",
+        border_style="cyan",
+        padding=(0, 2),
+    ))
+
+    # ── /config ───────────────────────────────────────────────────────────
+    console.print(Panel(
+        "  交互式配置 LLM 提供商、API Key 和模型\n"
+        "  支持：[cyan]DeepSeek / OpenAI / Qwen / Gemini / GLM / MiniMax[/cyan]\n"
+        f"  配置持久化至：[dim]{data_dir}/.env[/dim]",
+        title="[bold green]/config[/bold green]  — LLM 配置",
+        border_style="green",
+        padding=(0, 2),
+    ))
+
+    # ── /roles ────────────────────────────────────────────────────────────
+    console.print(Panel(
+        "  为 AI 设置自定义角色行为（如"用中文回答"、"专注于电磁仿真"等）\n"
+        "  操作：[yellow]添加（add）/ 修改（change）/ 删除（delete）/ 查看[/yellow]\n"
+        "  每次对话前自动注入到系统提示词\n"
+        "  限制：最多 [bold]5[/bold] 个角色，每个最多 [bold]200[/bold] 行\n"
+        f"  存储位置：[dim]{data_dir}/roles/[/dim]",
+        title="[bold yellow]/roles[/bold yellow]  — 角色管理",
+        border_style="yellow",
+        padding=(0, 2),
+    ))
+
+    # ── Skill ─────────────────────────────────────────────────────────────
+    console.print(Panel(
+        "  AI 可主动调用 [cyan]use_skill[/cyan] 工具加载专业仿真流程指南\n"
+        "  内置技能：\n"
+        "    • [bold]maxwell-motor-workflow[/bold]  Maxwell 电机 2D 仿真标准流程\n"
+        "    • [bold]thermal-em-coupling[/bold]     电磁-热耦合仿真流程\n"
+        "  自定义技能：在以下目录创建 [dim]<skill-name>/SKILL.md[/dim] 文件\n"
+        f"    [dim]{data_dir}/skills/[/dim]\n"
+        "  文件格式：YAML frontmatter（name / description）+ Markdown 正文",
+        title="[bold magenta]Skill[/bold magenta]       — 专业流程指南",
+        border_style="magenta",
+        padding=(0, 2),
+    ))
+
+    # ── RAG ───────────────────────────────────────────────────────────────
+    console.print(Panel(
+        "  自动检索本地知识文档辅助 AI 回答 API 用法、错误处理、仿真步骤等\n"
+        "  内置文档：[dim]docs/api/[/dim]（API 速查表）、[dim]knowledge/official/[/dim]（官方教程）\n"
+        "  自定义文档：将 PDF / PPTX / IPYNB 等放入 [dim]knowledge/internal/[/dim]\n"
+        "              然后告诉 AI "重建知识索引"\n"
+        f"  索引缓存：[dim]{data_dir}/.rag/keyword_index.json[/dim]\n"
+        "  （删除缓存文件可强制从头重建索引）",
+        title="[bold blue]RAG[/bold blue]         — 本地知识库",
+        border_style="blue",
+        padding=(0, 2),
+    ))
+
+    # ── 其他命令 ──────────────────────────────────────────────────────────
+    console.print(Panel(
+        "  [dim]/exit  /quit[/dim]  → 退出程序（也可按 Ctrl+C）\n"
+        "  [dim]/coffee[/dim]       → ☕ 彩蛋\n"
+        "  [dim]/motor[/dim]        → ⚡ 彩蛋",
+        title="其他命令",
+        border_style="dim",
+        padding=(0, 2),
+    ))
 
 
 def _stream_response(agent, user_input: str) -> str:
@@ -207,6 +423,17 @@ def cli(prompt: str | None):
             except Exception as e:
                 _log.error("配置变更失败: %s", e, exc_info=True)
                 console.print(f"[red]配置失败: {e}[/red]")
+            continue
+        if user_input.lower() == "/roles":
+            try:
+                run_roles_wizard(console)
+                _log.info("用户完成 roles 管理")
+            except Exception as e:
+                _log.error("Roles 管理异常: %s", e, exc_info=True)
+                console.print(f"[red]Roles 操作失败: {e}[/red]")
+            continue
+        if user_input.lower() == "/help":
+            _show_help(console)
             continue
 
         _log.info("用户输入: %s", user_input)
