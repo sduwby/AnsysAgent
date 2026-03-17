@@ -192,6 +192,64 @@ class MCPManager:
         """检查是否为 MCP 管理的工具。"""
         return tool_name in self._tool_to_server
 
+    def get_server_info(self) -> list[dict]:
+        """返回所有已配置 MCP server 的状态信息（供 /mcp 向导展示）。"""
+        config = _load_config()
+        result = []
+        for name, cfg in config.items():
+            connected = name in self._sessions
+            tool_count = sum(1 for v in self._tool_to_server.values() if v == name)
+            result.append({
+                "name": name,
+                "description": cfg.get("description", ""),
+                "enabled": cfg.get("enabled", True),
+                "connected": connected,
+                "tool_count": tool_count,
+            })
+        return result
+
+    def toggle_server(self, name: str, enabled: bool) -> tuple[bool, str]:
+        """启用或禁用指定 MCP server，更新配置文件（重启后生效）。"""
+        config = _load_config()
+        if name not in config:
+            return False, f"MCP server '{name}' 不存在于配置中"
+        config[name]["enabled"] = enabled
+        MCP_CONFIG_PATH.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        action = "启用" if enabled else "禁用"
+        _log.info("MCP server '%s' 已%s（重启后生效）", name, action)
+        return True, f"MCP server '{name}' 已{action}（重启后生效）"
+
+    def reconnect(self) -> str:
+        """断开所有 MCP server 连接并重新连接所有启用的 server，返回结果摘要。"""
+        if not self._available:
+            return "MCP 功能不可用（mcp 包未安装）"
+        try:
+            # 先关闭现有连接
+            self._run_sync(self._shutdown_all(), timeout=15.0)
+        except Exception as e:
+            _log.warning("断开 MCP server 时出现异常: %s", e)
+
+        # 清空状态
+        self._sessions.clear()
+        self._exit_stacks.clear()
+        self._tool_definitions.clear()
+        self._tool_to_server.clear()
+
+        # 重新连接
+        try:
+            self._run_sync(self._connect_all())
+            connected = list(self._sessions.keys())
+            if connected:
+                return f"重新连接成功：{', '.join(connected)}（共 {len(self._tool_to_server)} 个工具）"
+            else:
+                return "重新连接完成，但无 server 成功连接（请检查配置或网络）"
+        except Exception as e:
+            _log.error("重新连接 MCP servers 失败: %s", e, exc_info=True)
+            return f"重新连接失败: {e}"
+
     def call_tool(self, tool_name: str, args: dict) -> str:
         """
         调用 MCP 工具，返回 JSON 字符串结果。

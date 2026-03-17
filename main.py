@@ -110,7 +110,7 @@ WELCOME = (
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  /help 查看帮助 | /config 配置 LLM | /roles 管理角色 | /exit 退出[/dim]"
+    "  /help 查看帮助 | /config 配置 LLM | /roles 管理角色 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]"
 )
 
 
@@ -257,6 +257,191 @@ def run_roles_wizard(console: Console) -> None:
             console.print("[yellow]  无效选项[/yellow]")
 
 
+# ---------------------------------------------------------------------------
+# Skills 向导
+# ---------------------------------------------------------------------------
+
+def run_skills_wizard(console: Console) -> None:
+    """Rich 交互式 Skills 管理向导。"""
+    from agent.skill_manager import SkillManager
+    sm = SkillManager.get_instance()
+
+    while True:
+        sm.reload()
+        skills = sm.get_available_skills()
+
+        # ── 显示技能列表 ───────────────────────────────────────────────
+        if skills:
+            lines = []
+            for skill in skills:
+                tag = "[dim](内置)[/dim]" if not sm.is_user_skill(skill.name) else "[green](用户)[/green]"
+                desc = skill.description[:50] + ("…" if len(skill.description) > 50 else "")
+                lines.append(f"  {tag} [bold]{skill.name}[/bold]\n       {desc}")
+            panel_text = "\n".join(lines)
+        else:
+            panel_text = "  （暂无技能）"
+
+        console.print(Panel(
+            panel_text,
+            title=f"可用技能（{len(skills)} 个）",
+            border_style="magenta",
+        ))
+
+        # ── 操作菜单 ──────────────────────────────────────────────────
+        console.print("\n[bold]选择操作[/bold]（Enter 退出）:")
+        console.print("  [1] 查看技能内容")
+        console.print("  [2] 添加用户自定义技能")
+        console.print("  [3] 删除用户自定义技能")
+
+        choice = Prompt.ask("  操作编号", default="").strip()
+        if choice == "":
+            break
+
+        # ── [1] 查看 ──────────────────────────────────────────────────
+        if choice == "1":
+            if not skills:
+                console.print("[yellow]  暂无技能可查看[/yellow]")
+                continue
+            name = Prompt.ask("  技能名称").strip()
+            skill = sm.get_skill(name)
+            if skill is None:
+                console.print(f"[red]  技能 '{name}' 不存在[/red]")
+            else:
+                preview = skill.content[:3000] + ("\n…（内容过长，已截断）" if len(skill.content) > 3000 else "")
+                console.print(Panel(preview, title=f"Skill: {name}", border_style="dim"))
+
+        # ── [2] 添加 ──────────────────────────────────────────────────
+        elif choice == "2":
+            name = Prompt.ask("  技能名称（英文或中文，用于目录命名）").strip()
+            if not name:
+                console.print("[yellow]  名称不能为空[/yellow]")
+                continue
+            description = Prompt.ask("  技能简介（一句话描述）").strip()
+            if not description:
+                console.print("[yellow]  简介不能为空[/yellow]")
+                continue
+            content = _read_multiline_content(console, "请输入技能正文内容（Markdown 格式）：")
+            if not content:
+                console.print("[yellow]  内容为空，已取消[/yellow]")
+                continue
+            ok, msg = sm.create_user_skill(name, description, content)
+            color = "green" if ok else "red"
+            console.print(f"[{color}]  {msg}[/{color}]")
+
+        # ── [3] 删除 ──────────────────────────────────────────────────
+        elif choice == "3":
+            user_skills = [s.name for s in skills if sm.is_user_skill(s.name)]
+            if not user_skills:
+                console.print("[yellow]  暂无可删除的用户自定义技能（内置技能不可删除）[/yellow]")
+                continue
+            name = Prompt.ask("  要删除的技能名称").strip()
+            confirm = Prompt.ask(f"  确认删除 '{name}'？(y/N)", default="n").strip().lower()
+            if confirm == "y":
+                ok, msg = sm.delete_user_skill(name)
+                color = "green" if ok else "red"
+                console.print(f"[{color}]  {msg}[/{color}]")
+            else:
+                console.print("[dim]  已取消[/dim]")
+
+        else:
+            console.print("[yellow]  无效选项[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# MCP 向导
+# ---------------------------------------------------------------------------
+
+def run_mcp_wizard(console: Console, mcp_manager) -> None:
+    """Rich 交互式 MCP 管理向导。"""
+    if not mcp_manager or not getattr(mcp_manager, "_available", False):
+        console.print(Panel(
+            "[red]MCP 功能不可用[/red]：mcp 包未安装。\n"
+            "请运行：[bold]pip install mcp duckduckgo-mcp-server[/bold]",
+            title="MCP 状态",
+            border_style="red",
+        ))
+        return
+
+    from agent.mcp_manager import MCP_CONFIG_PATH
+
+    while True:
+        servers = mcp_manager.get_server_info()
+
+        # ── 显示 server 状态 ──────────────────────────────────────────
+        if servers:
+            lines = []
+            for srv in servers:
+                if srv["connected"]:
+                    status = "[green]● 已连接[/green]"
+                elif not srv["enabled"]:
+                    status = "[dim]○ 已禁用[/dim]"
+                else:
+                    status = "[red]✗ 未连接[/red]"
+                desc = srv["description"][:45] + ("…" if len(srv["description"]) > 45 else "")
+                lines.append(
+                    f"  {status} [bold]{srv['name']}[/bold]  ({srv['tool_count']} tools)\n"
+                    f"       [dim]{desc}[/dim]"
+                )
+            panel_text = "\n".join(lines)
+        else:
+            panel_text = "  （无 MCP server 配置）"
+
+        console.print(Panel(
+            panel_text,
+            title=f"MCP Servers（配置文件: {MCP_CONFIG_PATH}）",
+            border_style="cyan",
+        ))
+
+        # ── 操作菜单 ──────────────────────────────────────────────────
+        console.print("\n[bold]选择操作[/bold]（Enter 退出）:")
+        console.print("  [1] 查看某 server 的可用工具")
+        console.print("  [2] 禁用 server")
+        console.print("  [3] 启用 server")
+        console.print("  [4] 重新连接所有 server（热重载）")
+
+        choice = Prompt.ask("  操作编号", default="").strip()
+        if choice == "":
+            break
+
+        # ── [1] 查看工具 ──────────────────────────────────────────────
+        if choice == "1":
+            name = Prompt.ask("  Server 名称").strip()
+            tools = [k for k, v in mcp_manager._tool_to_server.items() if v == name]
+            if not tools:
+                console.print(f"[yellow]  '{name}' 暂无可用工具（未连接或不存在）[/yellow]")
+            else:
+                tool_list = "\n".join(f"  • {t}" for t in sorted(tools))
+                console.print(Panel(tool_list, title=f"{name} 工具列表", border_style="dim"))
+
+        # ── [2] 禁用 ──────────────────────────────────────────────────
+        elif choice == "2":
+            name = Prompt.ask("  要禁用的 server 名称").strip()
+            ok, msg = mcp_manager.toggle_server(name, enabled=False)
+            color = "green" if ok else "red"
+            console.print(f"[{color}]  {msg}[/{color}]")
+
+        # ── [3] 启用 ──────────────────────────────────────────────────
+        elif choice == "3":
+            name = Prompt.ask("  要启用的 server 名称").strip()
+            ok, msg = mcp_manager.toggle_server(name, enabled=True)
+            color = "green" if ok else "red"
+            console.print(f"[{color}]  {msg}[/{color}]")
+
+        # ── [4] 重新连接 ───────────────────────────────────────────────
+        elif choice == "4":
+            console.print("[dim]  正在重新连接所有 MCP server…[/dim]")
+            result_msg = mcp_manager.reconnect()
+            color = "green" if "成功" in result_msg else "yellow"
+            console.print(f"[{color}]  {result_msg}[/{color}]")
+
+        else:
+            console.print("[yellow]  无效选项[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# 帮助
+# ---------------------------------------------------------------------------
+
 def _show_help(console: Console) -> None:
     """用多块彩色 Panel 展示功能指南，风格与 /config 一致。"""
     from agent.paths import ANSYS_DATA_DIR
@@ -299,10 +484,11 @@ def _show_help(console: Console) -> None:
         "  内置技能：\n"
         "    • [bold]maxwell-motor-workflow[/bold]  Maxwell 电机 2D 仿真标准流程\n"
         "    • [bold]thermal-em-coupling[/bold]     电磁-热耦合仿真流程\n"
-        "  自定义技能：在以下目录创建 [dim]<skill-name>/SKILL.md[/dim] 文件\n"
+        "  用 [bold]/skills[/bold] 管理技能：查看 / 添加用户自定义技能 / 删除\n"
+        "  自定义技能存储目录：\n"
         f"    [dim]{data_dir}/skills/[/dim]\n"
         "  文件格式：YAML frontmatter（name / description）+ Markdown 正文",
-        title="[bold magenta]Skill[/bold magenta]       — 专业流程指南",
+        title="[bold magenta]/skills[/bold magenta]      — 专业流程指南",
         border_style="magenta",
         padding=(0, 2),
     ))
@@ -322,6 +508,7 @@ def _show_help(console: Console) -> None:
 
     # ── 其他命令 ──────────────────────────────────────────────────────────
     console.print(Panel(
+        "  [dim]/mcp[/dim]           → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
         "  [dim]/exit  /quit[/dim]  → 退出程序（也可按 Ctrl+C）\n"
         "  [dim]/coffee[/dim]       → ☕ 彩蛋\n"
         "  [dim]/motor[/dim]        → ⚡ 彩蛋",
@@ -433,6 +620,22 @@ def cli(prompt: str | None):
                 except Exception as e:
                     _log.error("Roles 管理异常: %s", e, exc_info=True)
                     console.print(f"[red]Roles 操作失败: {e}[/red]")
+                continue
+            if user_input.lower() == "/skills":
+                try:
+                    run_skills_wizard(console)
+                    _log.info("用户完成 skills 管理")
+                except Exception as e:
+                    _log.error("Skills 管理异常: %s", e, exc_info=True)
+                    console.print(f"[red]Skills 操作失败: {e}[/red]")
+                continue
+            if user_input.lower() == "/mcp":
+                try:
+                    run_mcp_wizard(console, agent._mcp_manager if hasattr(agent, "_mcp_manager") else None)
+                    _log.info("用户完成 MCP 管理")
+                except Exception as e:
+                    _log.error("MCP 管理异常: %s", e, exc_info=True)
+                    console.print(f"[red]MCP 操作失败: {e}[/red]")
                 continue
             if user_input.lower() == "/help":
                 _show_help(console)
