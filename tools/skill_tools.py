@@ -19,6 +19,7 @@ def use_skill(skill_name: str) -> dict:
       success=False → {"success": False, "error": ..., "available_skills": [...]}
     """
     manager = SkillManager.get_instance()
+    manager.reload()
     skill = manager.get_skill(skill_name)
 
     if skill is None:

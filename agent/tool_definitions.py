@@ -2021,7 +2021,9 @@ def build_use_skill_definition() -> dict:
     在每次 LLM 调用前动态生成，确保 LLM 获知最新技能列表。
     """
     from agent.skill_manager import SkillManager
-    skills = SkillManager.get_instance().get_available_skills()
+    manager = SkillManager.get_instance()
+    manager.reload()
+    skills = manager.get_available_skills()
 
     if not skills:
         description = (

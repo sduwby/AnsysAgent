@@ -133,14 +133,16 @@ def _read_multiline_content(console: Console, prompt_hint: str = "") -> str:
         try:
             line = input()
         except (KeyboardInterrupt, EOFError):
+            if prev_empty:
+                lines.append("")
             break
         if line == "":
             if prev_empty:
                 break  # 连续两次空行 → 结束
             prev_empty = True
-        else:
-            if prev_empty:
-                lines.append("")  # 保留中间的单个空行
+            continue
+        if prev_empty:
+            lines.append("")  # 保留中间的单个空行
             prev_empty = False
         lines.append(line)
     return "\n".join(lines).strip()
@@ -281,7 +283,7 @@ def _show_help(console: Console) -> None:
 
     # ── /roles ────────────────────────────────────────────────────────────
     console.print(Panel(
-        "  为 AI 设置自定义角色行为（如"用中文回答"、"专注于电磁仿真"等）\n"
+        '  为 AI 设置自定义角色行为（如"用中文回答"、"专注于电磁仿真"等）\n'
         "  操作：[yellow]添加（add）/ 修改（change）/ 删除（delete）/ 查看[/yellow]\n"
         "  每次对话前自动注入到系统提示词\n"
         "  限制：最多 [bold]5[/bold] 个角色，每个最多 [bold]200[/bold] 行\n"
@@ -310,7 +312,7 @@ def _show_help(console: Console) -> None:
         "  自动检索本地知识文档辅助 AI 回答 API 用法、错误处理、仿真步骤等\n"
         "  内置文档：[dim]docs/api/[/dim]（API 速查表）、[dim]knowledge/official/[/dim]（官方教程）\n"
         "  自定义文档：将 PDF / PPTX / IPYNB 等放入 [dim]knowledge/internal/[/dim]\n"
-        "              然后告诉 AI "重建知识索引"\n"
+        '              然后告诉 AI "重建知识索引"\n'
         f"  索引缓存：[dim]{data_dir}/.rag/keyword_index.json[/dim]\n"
         "  （删除缓存文件可强制从头重建索引）",
         title="[bold blue]RAG[/bold blue]         — 本地知识库",
@@ -372,82 +374,86 @@ def cli(prompt: str | None):
     from agent.chat_agent import ChatAgent
 
     agent = ChatAgent()
-
-    if prompt:
-        # 单次执行模式：ansys-agent -p "..."
-        _log.info("单次执行模式 | 指令: %s", prompt)
-        try:
-            reply = _stream_response(agent, prompt)
-            _log.info("回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
-        except Exception as e:
-            _log.error("单次执行失败: %s", e, exc_info=True)
-            console.print(f"[red]错误: {e}[/red]")
-            sys.exit(1)
-        return
-
-    # 交互模式
-    _log.info("进入交互模式")
-    console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
-    _maybe_show_startup_egg()
-
-    while True:
-        try:
-            user_input = Prompt.ask("\n[bold green]用户[/bold green]").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]再见。[/dim]")
-            _log.info("用户退出（KeyboardInterrupt/EOFError）")
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in ("/exit", "/quit", "quit", "exit", "q", "退出"):
-            console.print("[dim]再见。[/dim]")
-            _log.info("用户主动退出")
-            break
-        if user_input.lower() == "/coffee":
-            console.print(f"[yellow]{_COFFEE_ART}[/yellow]")
-            console.print("[bold yellow]⚡ 工程师加燃料完毕，继续仿真！[/bold yellow]")
-            continue
-        if user_input.lower() == "/motor":
-            console.print(f"[cyan]{_MOTOR_ART}[/cyan]")
-            console.print("[bold cyan]这就是你在仿真的东西，加油！💪[/bold cyan]")
-            continue
-        if user_input.lower() == "/config":
+    try:
+        if prompt:
+            # 单次执行模式：ansys-agent -p "..."
+            _log.info("单次执行模式 | 指令: %s", prompt)
             try:
-                run_config_wizard(console)
-                # 热重载 .env → 覆盖 os.environ → 重建 LLM 客户端
-                load_dotenv(override=True)
-                agent.reload_config()
-                console.print("[green]✓ 配置已生效[/green]")
-                _log.info("LLM 配置已变更并热重载")
+                reply = _stream_response(agent, prompt)
+                _log.info("回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
             except Exception as e:
-                _log.error("配置变更失败: %s", e, exc_info=True)
-                console.print(f"[red]配置失败: {e}[/red]")
-            continue
-        if user_input.lower() == "/roles":
-            try:
-                run_roles_wizard(console)
-                _log.info("用户完成 roles 管理")
-            except Exception as e:
-                _log.error("Roles 管理异常: %s", e, exc_info=True)
-                console.print(f"[red]Roles 操作失败: {e}[/red]")
-            continue
-        if user_input.lower() == "/help":
-            _show_help(console)
-            continue
+                _log.error("单次执行失败: %s", e, exc_info=True)
+                console.print(f"[red]错误: {e}[/red]")
+                sys.exit(1)
+            return
 
-        _log.info("用户输入: %s", user_input)
+        # 交互模式
+        _log.info("进入交互模式")
+        console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
+        _maybe_show_startup_egg()
+
+        while True:
+            try:
+                user_input = Prompt.ask("\n[bold green]用户[/bold green]").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]再见。[/dim]")
+                _log.info("用户退出（KeyboardInterrupt/EOFError）")
+                break
+
+            if not user_input:
+                continue
+            if user_input.lower() in ("/exit", "/quit", "quit", "exit", "q", "退出"):
+                console.print("[dim]再见。[/dim]")
+                _log.info("用户主动退出")
+                break
+            if user_input.lower() == "/coffee":
+                console.print(f"[yellow]{_COFFEE_ART}[/yellow]")
+                console.print("[bold yellow]⚡ 工程师加燃料完毕，继续仿真！[/bold yellow]")
+                continue
+            if user_input.lower() == "/motor":
+                console.print(f"[cyan]{_MOTOR_ART}[/cyan]")
+                console.print("[bold cyan]这就是你在仿真的东西，加油！💪[/bold cyan]")
+                continue
+            if user_input.lower() == "/config":
+                try:
+                    run_config_wizard(console)
+                    # 热重载 .env → 覆盖 os.environ → 重建 LLM 客户端
+                    load_dotenv(override=True)
+                    agent.reload_config()
+                    console.print("[green]✓ 配置已生效[/green]")
+                    _log.info("LLM 配置已变更并热重载")
+                except Exception as e:
+                    _log.error("配置变更失败: %s", e, exc_info=True)
+                    console.print(f"[red]配置失败: {e}[/red]")
+                continue
+            if user_input.lower() == "/roles":
+                try:
+                    run_roles_wizard(console)
+                    _log.info("用户完成 roles 管理")
+                except Exception as e:
+                    _log.error("Roles 管理异常: %s", e, exc_info=True)
+                    console.print(f"[red]Roles 操作失败: {e}[/red]")
+                continue
+            if user_input.lower() == "/help":
+                _show_help(console)
+                continue
+
+            _log.info("用户输入: %s", user_input)
+            try:
+                reply = _stream_response(agent, user_input)
+                _log.info("Agent 回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
+            except KeyboardInterrupt:
+                console.print("\n[yellow]已中断。[/yellow]")
+                _log.warning("用户中断了当前请求")
+            except Exception as e:
+                _log.error("处理用户输入时出错: %s", e, exc_info=True)
+                console.print(f"[red]错误: {e}[/red]")
+    finally:
         try:
-            reply = _stream_response(agent, user_input)
-            _log.info("Agent 回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
-        except KeyboardInterrupt:
-            console.print("\n[yellow]已中断。[/yellow]")
-            _log.warning("用户中断了当前请求")
+            agent.shutdown()
         except Exception as e:
-            _log.error("处理用户输入时出错: %s", e, exc_info=True)
-            console.print(f"[red]错误: {e}[/red]")
+            _log.warning("关闭 Agent 资源时发生异常: %s", e)
 
 
 if __name__ == "__main__":
     cli()
-

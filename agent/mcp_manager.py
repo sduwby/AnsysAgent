@@ -26,7 +26,7 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from agent.paths import ANSYS_DATA_DIR
 from agent.logger import get_logger
@@ -88,6 +88,8 @@ class MCPManager:
         self._tool_to_server: dict[str, str] = {}  # tool_name → server_name
         self._sessions: dict[str, Any] = {}        # server_name → ClientSession
         self._exit_stacks: dict[str, Any] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._available = False
 
         # 检查 mcp 包是否安装
@@ -118,6 +120,8 @@ class MCPManager:
 
     def _run_sync(self, coro, timeout: float = 30.0):
         """在后台 event loop 中执行协程，阻塞等待结果。"""
+        if self._loop is None:
+            raise RuntimeError("MCP event loop 未初始化")
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
@@ -152,6 +156,8 @@ class MCPManager:
         read, write = await stack.enter_async_context(stdio_client(params))
         session: ClientSession = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
+        self._sessions[name] = session
+        self._exit_stacks[name] = stack
 
         # 获取工具列表
         tools_result = await session.list_tools()
@@ -159,8 +165,6 @@ class MCPManager:
         for tool in tools_result.tools:
             tool_name = f"mcp__{name}__{tool.name}"
             self._tool_to_server[tool_name] = name
-            self._sessions[name] = session
-            self._exit_stacks[name] = stack
 
             # 转换为 OpenAI function calling 格式
             input_schema = tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}}
@@ -182,7 +186,7 @@ class MCPManager:
 
     def get_tool_definitions(self) -> list[dict]:
         """返回所有 MCP 工具的 OpenAI function calling 定义列表。"""
-        return self._tool_definitions
+        return list(self._tool_definitions)
 
     def has_tool(self, tool_name: str) -> bool:
         """检查是否为 MCP 管理的工具。"""
@@ -236,7 +240,7 @@ class MCPManager:
 
     def shutdown(self) -> None:
         """关闭所有 MCP server 连接。"""
-        if not self._available:
+        if not self._available or self._loop is None:
             return
         try:
             self._run_sync(self._shutdown_all(), timeout=10.0)
@@ -244,6 +248,9 @@ class MCPManager:
             _log.warning("MCP shutdown 异常: %s", e)
         finally:
             self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=2.0)
+            self._available = False
 
     async def _shutdown_all(self) -> None:
         for name, stack in self._exit_stacks.items():

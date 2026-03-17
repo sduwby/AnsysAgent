@@ -283,6 +283,14 @@ class ChatAgent:
     def reload_config(self) -> None:
         """重新加载配置并重建客户端（保留对话历史）。"""
         self._init_client()
+        self._init_sub_agents()
+
+    def shutdown(self) -> None:
+        """释放后台资源。"""
+        try:
+            self._mcp.shutdown()
+        except Exception as e:
+            _log.warning("关闭 MCP 管理器失败: %s", e)
 
     def _call_with_fallback(self, call_fn, *args, **kwargs):
         """
