@@ -48,6 +48,10 @@ load_dotenv(_find_env_path())
 setup_logging()
 _log = get_logger("main")
 
+# 启动日志查看 HTTP server（后台守护线程）
+from agent.log_server import start_log_server as _start_log_server
+_log_port = _start_log_server()
+
 console = Console()
 VERSION = "0.1.0"
 
@@ -110,7 +114,8 @@ WELCOME = (
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  /help 查看帮助 | /config 配置 LLM | /roles 管理角色 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]"
+    "  /help 查看帮助 | /config 配置 LLM | /roles 管理角色 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]\n"
+    f"[dim]📋 Log viewer: http://localhost:{{_log_port}}[/dim]"
 )
 
 
