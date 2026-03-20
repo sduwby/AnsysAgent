@@ -120,7 +120,19 @@ ansys-agent --version
 - `/help`：显示功能帮助
 - `/config`：配置 LLM 提供商、API Key 和模型
 - `/roles`：管理用户自定义角色（最多 5 个，每个最多 200 行）
+- `/skills`：管理技能（查看内置/用户技能，添加、删除用户自定义技能）
+- `/mcp`：管理 MCP Server（查看已注册工具、添加/删除 server 配置）
 - `/exit` / `/quit`：退出程序
+
+### 日志查看
+
+启动后自动在后台开启日志查看界面：
+
+```
+http://localhost:7788
+```
+
+支持实时刷新、INFO / WARNING / ERROR / DEBUG 四色染色。端口可通过环境变量 `ANSYS_LOG_PORT` 覆盖。
 
 ### 运行时数据目录
 
@@ -271,6 +283,7 @@ AnsysAgent/
 │   ├── skill_manager.py           # Skill 扫描与加载
 │   ├── tool_definitions.py        # 工具注册表 + OpenAI function calling 定义
 │   ├── prompt.py                  # Main Agent system prompt
+│   ├── log_server.py              # 日志查看 HTTP server（默认端口 7788）
 │   └── sub_agents/                # Maxwell/Icepak/Fluent/... 专业代理
 ├── tools/
 │   ├── maxwell_tools.py           # 电磁仿真（含自定义材料/B-H曲线）
