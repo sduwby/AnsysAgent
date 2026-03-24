@@ -513,11 +513,12 @@ def _show_help(console: Console) -> None:
 
     # ── 其他命令 ──────────────────────────────────────────────────────────
     console.print(Panel(
-        "  [dim]/clear  /new[/dim]  → 清空对话历史，开始新对话\n"
-        "  [dim]/mcp[/dim]           → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
-        "  [dim]/exit  /quit[/dim]  → 退出程序（也可按 Ctrl+C）\n"
-        "  [dim]/coffee[/dim]       → ☕ 彩蛋\n"
-        "  [dim]/motor[/dim]        → ⚡ 彩蛋",
+        "  [dim]/clear  /new[/dim]   → 清空对话历史，开始新对话\n"
+        "  [dim]/purge  /clean[/dim] → [red]删除所有本地数据[/red]（配置/索引/日志/角色/技能），不可撤销\n"
+        "  [dim]/mcp[/dim]            → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
+        "  [dim]/exit  /quit[/dim]   → 退出程序（也可按 Ctrl+C）\n"
+        "  [dim]/coffee[/dim]        → ☕ 彩蛋\n"
+        "  [dim]/motor[/dim]         → ⚡ 彩蛋",
         title="其他命令",
         border_style="dim",
         padding=(0, 2),
@@ -650,6 +651,30 @@ def cli(prompt: str | None):
                 agent.history.clear()
                 _log.info("用户清空对话历史")
                 console.print("[dim]✓ 对话历史已清空，开始新对话。[/dim]")
+                continue
+            if user_input.lower() in ("/purge", "/clean", "清除本地数据"):
+                from agent.paths import ANSYS_DATA_DIR
+                import shutil
+                console.print(Panel(
+                    f"  即将删除：[bold red]{ANSYS_DATA_DIR}[/bold red]\n"
+                    "  包含：.env（LLM 配置）、.rag（知识索引）、logs（日志）、\n"
+                    "        roles（角色）、skills（技能）、knowledge（用户知识库）、mcp_servers.json",
+                    title="[bold red]⚠ 警告：此操作不可撤销[/bold red]",
+                    border_style="red",
+                    padding=(0, 2),
+                ))
+                confirm = Prompt.ask("  确认删除所有本地数据？输入 [bold red]yes[/bold red] 继续", default="no").strip().lower()
+                if confirm == "yes":
+                    try:
+                        shutil.rmtree(ANSYS_DATA_DIR)
+                        _log.info("用户清除了所有本地数据: %s", ANSYS_DATA_DIR)
+                        console.print(f"[green]✓ 已删除 {ANSYS_DATA_DIR}，程序将退出（下次启动将重新初始化）。[/green]")
+                        break
+                    except Exception as e:
+                        _log.error("清除本地数据失败: %s", e, exc_info=True)
+                        console.print(f"[red]删除失败: {e}[/red]")
+                else:
+                    console.print("[dim]  已取消。[/dim]")
                 continue
 
             _log.info("用户输入: %s", user_input)
