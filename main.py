@@ -513,6 +513,7 @@ def _show_help(console: Console) -> None:
 
     # ── 其他命令 ──────────────────────────────────────────────────────────
     console.print(Panel(
+        "  [dim]/clear  /new[/dim]  → 清空对话历史，开始新对话\n"
         "  [dim]/mcp[/dim]           → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
         "  [dim]/exit  /quit[/dim]  → 退出程序（也可按 Ctrl+C）\n"
         "  [dim]/coffee[/dim]       → ☕ 彩蛋\n"
@@ -644,6 +645,11 @@ def cli(prompt: str | None):
                 continue
             if user_input.lower() == "/help":
                 _show_help(console)
+                continue
+            if user_input.lower() in ("/clear", "/new", "新建对话"):
+                agent.history.clear()
+                _log.info("用户清空对话历史")
+                console.print("[dim]✓ 对话历史已清空，开始新对话。[/dim]")
                 continue
 
             _log.info("用户输入: %s", user_input)

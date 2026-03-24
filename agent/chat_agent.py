@@ -222,7 +222,7 @@ class ChatAgent:
     def _maybe_compress_history(self) -> None:
         """
         若历史消息估算 token 超过阈值，将旧消息压缩为摘要。
-        保留最近 _KEEP_RECENT 条消息，旧消息发给 LLM 生成摘要后以 user 角色插入。
+        保留最近 _KEEP_RECENT 条消息，旧消息发给 LLM 生成摘要后以 system 角色插入。
         """
         if _estimate_tokens(self.history) <= _COMPRESS_THRESHOLD:
             return
@@ -233,9 +233,21 @@ class ChatAgent:
         recent_msgs = self.history[-_KEEP_RECENT:]
 
         # 将旧消息序列化为文本供 LLM 压缩
-        old_text = "\n".join(
-            f"[{m['role'].upper()}] {m.get('content') or ''}" for m in old_msgs
-        )
+        # 修复：assistant 消息的工具调用信息在 tool_calls 字段而非 content，需单独处理
+        def _msg_to_text(m: dict) -> str:
+            role = m["role"].upper()
+            content = m.get("content") or ""
+            tool_calls = m.get("tool_calls")
+            if tool_calls:
+                calls_summary = ", ".join(
+                    f"{tc.get('function', {}).get('name', '?')}({tc.get('function', {}).get('arguments', '')[:80]})"
+                    if isinstance(tc, dict) else str(tc)
+                    for tc in tool_calls
+                )
+                return f"[{role}] (调用工具: {calls_summary}) {content}"
+            return f"[{role}] {content}"
+
+        old_text = "\n".join(_msg_to_text(m) for m in old_msgs)
         compress_request = [{"role": "user", "content": f"请压缩以下对话历史：\n\n{old_text}"}]
 
         try:
@@ -247,8 +259,9 @@ class ChatAgent:
                 max_tokens=1024,
             )
             summary = resp.choices[0].message.content or ""
+            # 修复：摘要改为 system 角色，避免 LLM 误将其当作用户指令
             summary_msg = {
-                "role": "user",
+                "role": "system",
                 "content": f"[以下是之前对话的摘要，请在后续回复中参考]\n{summary}",
             }
             self.history = [summary_msg] + recent_msgs
@@ -372,7 +385,7 @@ class ChatAgent:
             _log.error("工具 %s 执行异常: %s", tool_name, e, exc_info=True)
             return json.dumps({"success": False, "error": str(e)})
 
-    def chat(self, user_message: str) -> str:
+    def chat(self, user_message: str, max_turns: int = 30) -> str:
         """发送用户消息，返回最终 Assistant 回复（非流式）。"""
         self.history.append({"role": "user", "content": user_message})
         self._maybe_compress_history()
@@ -384,7 +397,8 @@ class ChatAgent:
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
 
-        while True:
+        # 修复：添加最大轮次限制，防止工具调用死循环
+        for _turn in range(max_turns):
             response = self._call_with_fallback(
                 _create,
                 max_tokens=4096,
@@ -405,7 +419,12 @@ class ChatAgent:
             # 执行所有工具调用
             for tool_call in msg.tool_calls:
                 fn_name = tool_call.function.name
-                fn_args = json.loads(tool_call.function.arguments)
+                # 修复：json.loads 加异常处理，避免 LLM 返回格式错误时崩溃
+                try:
+                    fn_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    _log.warning("工具 %s 参数解析失败，跳过: %s", fn_name, tool_call.function.arguments)
+                    fn_args = {}
                 if fn_name == "delegate_to_agent":
                     console.print(
                         f"[dim]🤖 委托给 [bold]{fn_args.get('agent_name')}[/bold] Sub-Agent: "
@@ -417,7 +436,10 @@ class ChatAgent:
                         f"{json.dumps(fn_args, ensure_ascii=False)}[/dim]"
                     )
                 result_str = self._execute_tool(fn_name, fn_args)
-                result_data = json.loads(result_str)
+                try:
+                    result_data = json.loads(result_str)
+                except json.JSONDecodeError:
+                    result_data = {}
                 if result_data.get("success"):
                     console.print(f"[green]  ✓ {result_data.get('result', 'OK')[:200]}[/green]")
                 else:
@@ -430,10 +452,13 @@ class ChatAgent:
                     "content": result_str,
                 })
 
-    def chat_stream(self, user_message: str):
+        _log.warning("chat() 达到最大轮次限制 (%d)，强制结束", max_turns)
+        return f"[达到最大工具调用轮次 {max_turns}，任务可能未完成，请重新描述需求]"
+
+    def chat_stream(self, user_message: str, max_turns: int = 30):
         """
         流式对话：生成器，逐 token yield 文本片段。
-        工具调用期间会 yield 特殊前缀 '\r\x00TOOL\x00' 开头的状态行。
+        工具调用期间会 yield 特殊前缀 '\x00TOOL\x00' 开头的状态行。
         """
         self.history.append({"role": "user", "content": user_message})
         self._maybe_compress_history()
@@ -444,7 +469,8 @@ class ChatAgent:
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
 
-        while True:
+        # 修复：添加最大轮次限制，防止工具调用死循环
+        for _turn in range(max_turns):
             # 先用非流式做工具调用处理，只在最终回复时流式输出
             response = self._call_with_fallback(
                 _create,
@@ -460,7 +486,6 @@ class ChatAgent:
             if not msg.tool_calls:
                 # 直接从非流式响应逐字符 yield，避免第二次 API 请求导致的
                 # token 浪费和结果不一致风险（第二次请求也可能返回工具调用）。
-                # history 在第 177 行已包含此条 assistant 消息，无需再追加。
                 content = msg.content or ""
                 for char in content:
                     yield char
@@ -469,11 +494,19 @@ class ChatAgent:
             # 有工具调用：通知调用方，执行工具
             for tool_call in msg.tool_calls:
                 fn_name = tool_call.function.name
-                fn_args = json.loads(tool_call.function.arguments)
+                # 修复：json.loads 加异常处理，避免 LLM 返回格式错误时崩溃
+                try:
+                    fn_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    _log.warning("工具 %s 参数解析失败，跳过: %s", fn_name, tool_call.function.arguments)
+                    fn_args = {}
                 yield f"\x00TOOL\x00{fn_name}:{json.dumps(fn_args, ensure_ascii=False)}"
 
                 result_str = self._execute_tool(fn_name, fn_args)
-                result_data = json.loads(result_str)
+                try:
+                    result_data = json.loads(result_str)
+                except json.JSONDecodeError:
+                    result_data = {}
                 status = "✓" if result_data.get("success") else "✗"
                 detail = result_data.get("result") or result_data.get("error") or ""
                 yield f"\x00TOOL_RESULT\x00{status} {detail}"
@@ -483,3 +516,6 @@ class ChatAgent:
                     "tool_call_id": tool_call.id,
                     "content": result_str,
                 })
+
+        _log.warning("chat_stream() 达到最大轮次限制 (%d)，强制结束", max_turns)
+        yield f"[达到最大工具调用轮次 {max_turns}，任务可能未完成，请重新描述需求]"
