@@ -28,7 +28,7 @@ AnsysAgent 是一个基于多 LLM 提供商 + 多 Agent 调度的 Ansys 仿真 A
 maxwell icepak fluent mapdl motorcad optimization reporting
    │
    ▼
-SubAgentBase（工具调用循环，最多 30 轮）
+SubAgentBase（工具调用循环）
    └── 调用 Tools 层（tools/*.py）
 ```
 

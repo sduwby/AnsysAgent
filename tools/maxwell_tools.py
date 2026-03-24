@@ -882,3 +882,152 @@ def import_bh_curve(
         )
     except Exception as e:
         return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：import_cad_geometry - 导入外部 3D CAD 模型（STEP / IGES / SAT）
+# ---------------------------------------------------------------------------
+
+def import_cad_geometry(
+    file_path: str,
+    design_name: str = "",
+    scale_factor: float = 1.0,
+    merge_objects: bool = False,
+) -> dict:
+    """
+    将外部 3D CAD 文件（.step / .iges / .sat / .stp）导入到当前 Maxwell 或 Maxwell3D 设计中。
+    支持来自 NX、SolidWorks、Creo、SpaceClaim 等 CAD 软件导出的标准格式。
+
+    Args:
+        file_path: CAD 文件绝对路径（.step / .stp / .iges / .igs / .sat）
+        design_name: 目标设计名称；为空则使用当前活跃设计
+        scale_factor: 几何缩放系数（默认 1.0，不缩放）
+        merge_objects: 是否将导入的几何体合并为单一实体，默认 False（保留各子部件）
+    """
+    import os
+
+    try:
+        if not os.path.exists(file_path):
+            return _err(f"CAD 文件不存在: {file_path}")
+
+        ext = os.path.splitext(file_path)[1].lower()
+        supported = {".step", ".stp", ".iges", ".igs", ".sat"}
+        if ext not in supported:
+            return _err(
+                f"不支持的文件格式 '{ext}'。"
+                f"支持格式：{', '.join(sorted(supported))}"
+            )
+
+        app = _app()
+
+        # 切换到指定设计（可选）
+        if design_name:
+            try:
+                app.set_active_design(design_name)
+            except Exception as e:
+                return _err(f"切换到设计 '{design_name}' 失败: {e}")
+
+        modeler = getattr(app, "modeler", None)
+        if modeler is None:
+            return _err("当前 AEDT 实例未暴露 modeler 属性，请确认已连接 Maxwell3D")
+
+        # 调用 PyAEDT modeler.import_3d_cad() 导入 CAD 文件
+        import_fn = getattr(modeler, "import_3d_cad", None)
+        if import_fn is None:
+            # 旧版本 PyAEDT 备用接口
+            import_fn = getattr(modeler, "import_cad", None)
+        if import_fn is None:
+            return _err("当前 PyAEDT 版本未提供 modeler.import_3d_cad() 接口，请升级至 0.6+")
+
+        imported_objects = import_fn(
+            file_path,
+            import_options={"scale_factor": scale_factor} if scale_factor != 1.0 else None,
+        )
+
+        if merge_objects and imported_objects and len(imported_objects) > 1:
+            try:
+                modeler.unite(imported_objects)
+                obj_count = 1
+                note = "（已合并为单一实体）"
+            except Exception as e:
+                obj_count = len(imported_objects) if imported_objects else 0
+                note = f"（合并失败: {e}，保留 {obj_count} 个子部件）"
+        else:
+            obj_count = len(imported_objects) if imported_objects else 0
+            note = ""
+
+        return _ok({
+            "imported_file": file_path,
+            "file_format": ext,
+            "objects_imported": obj_count,
+            "scale_factor": scale_factor,
+            "note": f"已成功导入 {obj_count} 个几何体{note}。"
+                    "请使用 assign_material 为各部件赋予材料，再继续建模和仿真。",
+        })
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：import_dxf - 导入 DXF/DWG 2D 截面（AutoCAD）
+# ---------------------------------------------------------------------------
+
+def import_dxf(
+    file_path: str,
+    layers: list[str] | None = None,
+    auto_cover: bool = True,
+) -> dict:
+    """
+    将 AutoCAD DXF 文件导入到当前 Maxwell2D 设计中，作为 2D 截面几何（适用于横截面电机仿真）。
+    DWG 需先在 AutoCAD 中另存为 DXF 格式。
+
+    Args:
+        file_path: DXF 文件绝对路径（.dxf）
+        layers: 要导入的图层名称列表；为空表示导入全部图层
+        auto_cover: 是否自动将封闭多段线转换为覆盖区域（Cover surface），默认 True
+    """
+    import os
+
+    try:
+        if not os.path.exists(file_path):
+            return _err(f"DXF 文件不存在: {file_path}")
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in {".dxf", ".dwg"}:
+            return _err(f"不支持的文件格式 '{ext}'，请提供 .dxf 文件")
+        if ext == ".dwg":
+            return _err(
+                "不支持直接导入 .dwg 文件，请在 AutoCAD 中将其另存为 DXF 格式（文件 → 另存为 → DXF）后重试"
+            )
+
+        app = _app()
+        modeler = getattr(app, "modeler", None)
+        if modeler is None:
+            return _err("当前 AEDT 实例未暴露 modeler 属性，请确认已连接 Maxwell2D")
+
+        # Maxwell2D 专用 import_dxf 接口
+        import_fn = getattr(app, "import_dxf", None)
+        if import_fn is None:
+            import_fn = getattr(modeler, "import_dxf", None)
+        if import_fn is None:
+            return _err("当前 PyAEDT 版本未提供 import_dxf() 接口，请确认使用 Maxwell2D 并升级 PyAEDT 至 0.6+")
+
+        kwargs: dict = {}
+        if layers:
+            kwargs["layers"] = layers
+        if auto_cover:
+            kwargs["auto_cover"] = True
+
+        imported_objects = import_fn(file_path, **kwargs)
+
+        obj_count = len(imported_objects) if imported_objects else 0
+        return _ok({
+            "imported_file": file_path,
+            "layers_requested": layers or "全部",
+            "objects_imported": obj_count,
+            "auto_cover": auto_cover,
+            "note": f"已从 DXF 导入 {obj_count} 个 2D 几何对象。"
+                    "请使用 assign_material 为各截面赋予材料，再配置绕组和求解设置。",
+        })
+    except Exception as e:
+        return _err(str(e))

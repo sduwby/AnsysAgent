@@ -385,7 +385,7 @@ class ChatAgent:
             _log.error("工具 %s 执行异常: %s", tool_name, e, exc_info=True)
             return json.dumps({"success": False, "error": str(e)})
 
-    def chat(self, user_message: str, max_turns: int = 30) -> str:
+    def chat(self, user_message: str) -> str:
         """发送用户消息，返回最终 Assistant 回复（非流式）。"""
         self.history.append({"role": "user", "content": user_message})
         self._maybe_compress_history()
@@ -397,8 +397,7 @@ class ChatAgent:
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
 
-        # 修复：添加最大轮次限制，防止工具调用死循环
-        for _turn in range(max_turns):
+        while True:
             response = self._call_with_fallback(
                 _create,
                 max_tokens=4096,
@@ -452,10 +451,7 @@ class ChatAgent:
                     "content": result_str,
                 })
 
-        _log.warning("chat() 达到最大轮次限制 (%d)，强制结束", max_turns)
-        return f"[达到最大工具调用轮次 {max_turns}，任务可能未完成，请重新描述需求]"
-
-    def chat_stream(self, user_message: str, max_turns: int = 30):
+    def chat_stream(self, user_message: str):
         """
         流式对话：生成器，逐 token yield 文本片段。
         工具调用期间会 yield 特殊前缀 '\x00TOOL\x00' 开头的状态行。
@@ -469,8 +465,7 @@ class ChatAgent:
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
 
-        # 修复：添加最大轮次限制，防止工具调用死循环
-        for _turn in range(max_turns):
+        while True:
             # 先用非流式做工具调用处理，只在最终回复时流式输出
             response = self._call_with_fallback(
                 _create,
@@ -516,6 +511,3 @@ class ChatAgent:
                     "tool_call_id": tool_call.id,
                     "content": result_str,
                 })
-
-        _log.warning("chat_stream() 达到最大轮次限制 (%d)，强制结束", max_turns)
-        yield f"[达到最大工具调用轮次 {max_turns}，任务可能未完成，请重新描述需求]"

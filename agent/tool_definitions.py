@@ -95,6 +95,9 @@ TOOL_REGISTRY: dict[str, callable] = {
     # 自定义材料工具（Maxwell）
     "create_custom_material": maxwell_tools.create_custom_material,
     "import_bh_curve": maxwell_tools.import_bh_curve,
+    # 外部 CAD 几何导入工具（Maxwell）
+    "import_cad_geometry": maxwell_tools.import_cad_geometry,
+    "import_dxf": maxwell_tools.import_dxf,
     # 项目管理工具
     "save_project": project_tools.save_project,
     "open_project": project_tools.open_project,
@@ -1097,6 +1100,72 @@ TOOL_DEFINITIONS = [
         },
     },
     # -----------------------------------------------------------------------
+    # 外部 CAD 几何导入工具定义（Maxwell）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "import_cad_geometry",
+            "description": (
+                "将外部 3D CAD 文件（STEP / IGES / SAT）导入到当前 Maxwell 或 Maxwell3D 设计中。"
+                "支持来自 NX、SolidWorks、Creo、SpaceClaim 等 CAD 软件导出的标准中性格式。"
+                "导入后需使用 assign_material 为各部件赋予材料属性。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "CAD 文件绝对路径（支持 .step / .stp / .iges / .igs / .sat）",
+                    },
+                    "design_name": {
+                        "type": "string",
+                        "description": "目标设计名称；留空则使用当前活跃设计",
+                    },
+                    "scale_factor": {
+                        "type": "number",
+                        "description": "几何缩放系数，默认 1.0（不缩放）。若 CAD 单位为 mm 而仿真单位为 m，则填 0.001",
+                    },
+                    "merge_objects": {
+                        "type": "boolean",
+                        "description": "是否将导入的各子部件合并为单一实体，默认 false（保留各子部件以便分别赋材料）",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_dxf",
+            "description": (
+                "将 AutoCAD DXF 文件导入到当前 Maxwell2D 设计中，作为 2D 截面几何。"
+                "适用于在 AutoCAD/其他 CAD 中绘制的电机横截面轮廓。"
+                "注意：不支持直接导入 .dwg，需在 AutoCAD 中先另存为 DXF 格式。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "DXF 文件绝对路径（.dxf）",
+                    },
+                    "layers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要导入的图层名称列表；留空则导入 DXF 中全部图层",
+                    },
+                    "auto_cover": {
+                        "type": "boolean",
+                        "description": "是否自动将封闭多段线转为覆盖区域（Cover surface），默认 true。建议保持 true 以便直接赋材料和网格",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
     # 项目管理工具定义
     # -----------------------------------------------------------------------
     {
@@ -1917,6 +1986,8 @@ _MAXWELL_TOOL_NAMES: frozenset[str] = frozenset({
     "check_demagnetization",
     # 自定义材料
     "create_custom_material", "import_bh_curve",
+    # 외부 CAD 导入
+    "import_cad_geometry", "import_dxf",
     # 网格控制
     "setup_length_mesh", "setup_skin_depth_mesh", "setup_surface_mesh", "get_mesh_stats",
     # RMXprt 初设计
