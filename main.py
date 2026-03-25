@@ -16,6 +16,15 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.styles import Style as PtkStyle
+    _PTK_AVAILABLE = True
+except ImportError:
+    _PTK_AVAILABLE = False
+
 from agent.config_manager import run_config_wizard
 from agent.logger import setup_logging, get_logger
 from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
@@ -104,6 +113,62 @@ def _maybe_show_startup_egg() -> None:
             border_style="dim yellow",
             expand=False,
         ))
+
+
+# ---------------------------------------------------------------------------
+# /命令自动补全
+# ---------------------------------------------------------------------------
+
+_SLASH_COMMANDS = [
+    ("/help",   "查看帮助"),
+    ("/config", "配置 LLM 提供商和 API Key"),
+    ("/roles",  "管理 AI 角色（添加/修改/删除）"),
+    ("/skills", "管理专业流程技能"),
+    ("/mcp",    "管理 MCP server"),
+    ("/clear",  "清空对话历史，开始新对话"),
+    ("/new",    "清空对话历史，开始新对话"),
+    ("/purge",  "删除所有本地数据（不可撤销）"),
+    ("/clean",  "删除所有本地数据（不可撤销）"),
+    ("/exit",   "退出程序"),
+    ("/quit",   "退出程序"),
+    ("/coffee", "☕ 彩蛋"),
+    ("/motor",  "⚡ 彩蛋"),
+]
+
+if _PTK_AVAILABLE:
+    class _SlashCompleter(Completer):
+        """仅在输入以 '/' 开头时触发补全，实时按前缀过滤命令列表。"""
+
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("/"):
+                return
+            prefix = text.lower()
+            for cmd, desc in _SLASH_COMMANDS:
+                if cmd.startswith(prefix):
+                    # 补全从当前输入位置开始（替换已输入的部分）
+                    yield Completion(
+                        cmd,
+                        start_position=-len(text),
+                        display=HTML(f"<b>{cmd}</b>  <ansibrightblack>{desc}</ansibrightblack>"),
+                    )
+
+    _PTK_STYLE = PtkStyle.from_dict({
+        "completion-menu.completion": "bg:#1e1e2e #cdd6f4",
+        "completion-menu.completion.current": "bg:#89b4fa #1e1e2e bold",
+        "scrollbar.background": "bg:#313244",
+        "scrollbar.button": "bg:#89b4fa",
+    })
+
+    def _make_prompt_session() -> "PromptSession":
+        return PromptSession(
+            completer=_SlashCompleter(),
+            complete_while_typing=True,
+            style=_PTK_STYLE,
+        )
+else:
+    def _make_prompt_session():  # type: ignore[misc]
+        return None
 
 
 WELCOME = (
@@ -586,9 +651,15 @@ def cli(prompt: str | None):
         console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
         _maybe_show_startup_egg()
 
+        # 初始化 prompt_toolkit 会话（支持 /命令自动补全）
+        ptk_session = _make_prompt_session()
+
         while True:
             try:
-                user_input = Prompt.ask("\n[bold green]用户[/bold green]").strip()
+                if ptk_session is not None:
+                    user_input = ptk_session.prompt("\n用户> ").strip()
+                else:
+                    user_input = Prompt.ask("\n[bold green]用户[/bold green]").strip()
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]再见。[/dim]")
                 _log.info("用户退出（KeyboardInterrupt/EOFError）")

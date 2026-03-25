@@ -28,6 +28,7 @@ click>=8.1.0
 # 工具库
 python-dotenv>=1.0.0
 rich>=13.0.0          # 终端格式化输出
+prompt_toolkit>=3.0.0  # 命令行输入增强（/命令自动补全）
 
 # PDF 文本提取（RAG 知识索引可选依赖）
 pypdf>=4.2.0
