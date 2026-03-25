@@ -203,6 +203,20 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "use_skill",
+            "description": "加载专业领域技能指南，获取特定仿真任务的详细操作步骤和工作流程。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_name": {"type": "string", "description": "要加载的技能名称"},
+                },
+                "required": ["skill_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "connect_aedt",
             "description": "连接到运行中的 AEDT 实例或启动新实例。",
             "parameters": {

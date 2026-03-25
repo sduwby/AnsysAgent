@@ -101,23 +101,34 @@ _COMPRESS_SYSTEM = (
     "摘要用中文输出，不超过 800 字。"
 )
 
-_KNOWLEDGE_HINTS = (
+_KNOWLEDGE_QUESTION_HINTS = (
     # 通用问答触发词（中文）
     "怎么", "如何", "为什么", "报错", "错误", "支持", "文档", "api", "help", "faq",
     "教程", "区别", "含义", "什么意思", "用法", "workflow", "官方", "步骤", "配置",
     # 通用问答触发词（英文）
     "how", "why", "error", "document", "docs", "support", "tutorial", "guide", "example",
-    # Ansys 产品线关键词
+    "what", "when", "where", "manual",
+    # 显式问句标记
+    "?", "？",
+)
+
+_KNOWLEDGE_DOMAIN_HINTS = (
     "mapdl", "maxwell", "fluent", "mechanical", "workbench", "aedt", "icepak",
     "rmxprt", "circuit", "q3d", "hfss", "discovery", "spaceclaim", "pyaedt",
     "pymechanical", "pymapdl", "pyfluent", "pyansys", "ansys",
-    # 仿真操作关键词
     "mesh", "网格", "material", "材料", "boundary", "边界", "load", "载荷",
-    "solve", "求解", "setup", "设置", "simulation", "仿真", "analysis", "分析",
-    "result", "结果", "post", "后处理", "plot", "绘图", "export", "导出",
+    "setup", "设置", "analysis", "分析", "result", "结果", "post", "后处理",
     "geometry", "几何", "model", "模型", "parameter", "参数", "constraint", "约束",
     "excitation", "激励", "winding", "绕组", "torque", "转矩", "efficiency", "效率",
     "temperature", "温度", "stress", "应力", "deformation", "变形", "frequency", "频率",
+    "back emf", "bemf", "transient", "eddy current", "modal", "harmonic",
+)
+
+_EXECUTION_HINTS = (
+    "帮我", "请帮我", "运行", "执行", "创建", "新建", "建立", "导出", "保存", "打开",
+    "关闭", "连接", "切换", "删除", "重建", "加载", "设置", "生成", "开始",
+    "run ", "create ", "build ", "export ", "save ", "open ", "close ", "connect ",
+    "switch ", "delete ", "rebuild ", "load ", "set ",
 )
 
 
@@ -174,7 +185,12 @@ class ChatAgent:
 
     def _should_use_knowledge(self, user_message: str) -> bool:
         text = user_message.lower()
-        return any(hint in text for hint in _KNOWLEDGE_HINTS)
+        has_question_hint = any(hint in text for hint in _KNOWLEDGE_QUESTION_HINTS)
+        if not has_question_hint:
+            return False
+        if any(hint in text for hint in _EXECUTION_HINTS):
+            return False
+        return any(hint in text for hint in _KNOWLEDGE_DOMAIN_HINTS)
 
     def _build_knowledge_context(self, user_message: str) -> str:
         if not self._knowledge_index_ready:
@@ -392,7 +408,8 @@ class ChatAgent:
         knowledge_context = self._build_knowledge_context(user_message)
 
         # Main-Agent 工具：delegate_to_agent + 跨软件协调工具 + 知识工具 + 技能工具（动态）
-        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
+        main_tools = [t for t in MAIN_TOOL_DEFINITIONS if t["function"]["name"] != "use_skill"]
+        _tools = [DELEGATE_TOOL_DEFINITION] + main_tools + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)
@@ -460,7 +477,8 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(user_message)
 
-        _tools = [DELEGATE_TOOL_DEFINITION] + MAIN_TOOL_DEFINITIONS + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
+        main_tools = [t for t in MAIN_TOOL_DEFINITIONS if t["function"]["name"] != "use_skill"]
+        _tools = [DELEGATE_TOOL_DEFINITION] + main_tools + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
 
         def _create(client: OpenAI, model: str, **kwargs):
             return client.chat.completions.create(model=model, **kwargs)

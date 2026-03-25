@@ -10,9 +10,14 @@ import json
 import os
 from typing import Any
 
-from tools.utils import _ok, _err, ensure_parent_dir, ok_message
+from tools.utils import _ok, _err, ensure_parent_dir, ok_message, append_warnings
 
 _fluent_session = None  # 全局 Fluent 会话实例
+_fluent_runtime_config = {
+    "turbulence_intensity": 0.05,
+    "turbulent_length_scale": None,
+    "max_iterations": 500,
+}
 
 
 def _session():
@@ -114,6 +119,7 @@ def setup_fluid_models(
     try:
         session = _session()
         setup = session.setup
+        warnings: list[str] = []
 
         # 配置湍流模型
         viscous = setup.models.viscous
@@ -137,14 +143,33 @@ def setup_fluid_models(
         if energy_on:
             setup.models.energy.enabled = True
 
-        return _ok(ok_message(
+        # 记录默认湍流参数，供后续边界条件配置复用
+        _fluent_runtime_config["turbulence_intensity"] = turbulence_intensity
+        _fluent_runtime_config["turbulent_length_scale"] = turbulent_length_scale
+
+        # 尝试写入可用的全局湍流长度尺度接口（不同版本 API 字段可能不同）
+        if turbulent_length_scale is not None:
+            applied = False
+            for attr_name in ("turbulent_length_scale", "length_scale"):
+                if hasattr(viscous, attr_name):
+                    try:
+                        setattr(viscous, attr_name, turbulent_length_scale)
+                        applied = True
+                        break
+                    except Exception as e:
+                        warnings.append(f"{attr_name} 写入失败: {e}")
+            if not applied:
+                warnings.append("当前 Fluent API 未暴露全局湍流长度尺度字段，已仅保存为后续边界条件默认值")
+
+        return _ok(append_warnings(ok_message(
             f"物理模型已配置：湍流={viscous_model}，"
             f"能量方程={'开启' if energy_on else '关闭'}，"
             f"湍流强度={turbulence_intensity * 100:.1f}%",
             viscous_model=viscous_model,
             energy_on=energy_on,
             turbulence_intensity=turbulence_intensity,
-        ))
+            turbulent_length_scale=turbulent_length_scale,
+        ), warnings))
     except Exception as e:
         return _err(str(e))
 
@@ -159,7 +184,7 @@ def define_boundary_conditions(
     velocity_magnitude: float | None = None,
     pressure_value: float | None = None,
     temperature: float | None = None,
-    turbulence_intensity: float = 0.05,
+    turbulence_intensity: float | None = None,
     hydraulic_diameter: float | None = None,
 ) -> dict:
     """
@@ -167,8 +192,7 @@ def define_boundary_conditions(
 
     Args:
         boundary_name: 边界名称（与网格中定义一致，如 "inlet"、"outlet"、"wall"）
-        bc_type: 边界类型，"velocity-inlet"、"pressure-inlet"、"pressure-outlet"、
-                 "wall"、"symmetry"、"periodic"
+        bc_type: 边界类型，"velocity-inlet"、"pressure-inlet"、"pressure-outlet"、"wall"
         velocity_magnitude: 速度大小（m/s），velocity-inlet 必填
         pressure_value: 压力值（Pa），pressure-inlet/pressure-outlet 使用
         temperature: 温度（K），开启能量方程时使用
@@ -179,6 +203,11 @@ def define_boundary_conditions(
         session = _session()
         bcs = session.setup.boundary_conditions
         supported_bc_types = {"velocity-inlet", "pressure-inlet", "pressure-outlet", "wall"}
+        effective_turbulence_intensity = (
+            turbulence_intensity
+            if turbulence_intensity is not None
+            else _fluent_runtime_config.get("turbulence_intensity", 0.05)
+        )
 
         if bc_type not in supported_bc_types:
             return _err(
@@ -192,9 +221,15 @@ def define_boundary_conditions(
             bc = bcs.velocity_inlet[boundary_name]
             if velocity_magnitude is not None:
                 bc.momentum.velocity.value = velocity_magnitude
-            bc.turbulence.turbulent_intensity = turbulence_intensity
+            bc.turbulence.turbulent_intensity = effective_turbulence_intensity
             if hydraulic_diameter is not None:
                 bc.turbulence.hydraulic_diameter = hydraulic_diameter
+            elif _fluent_runtime_config.get("turbulent_length_scale") is not None:
+                # 若调用方未传水力直径，尝试使用 setup_fluid_models 记录的长度尺度默认值
+                for attr_name in ("turbulent_length_scale", "length_scale"):
+                    if hasattr(bc.turbulence, attr_name):
+                        setattr(bc.turbulence, attr_name, _fluent_runtime_config["turbulent_length_scale"])
+                        break
             if temperature is not None:
                 bc.thermal.temperature.value = temperature
 
@@ -269,6 +304,12 @@ def setup_fluent_solver(
             except Exception:
                 pass
 
+        # 保存并尽量下发默认迭代步，便于后续 run_fluent_simulation 复用
+        _fluent_runtime_config["max_iterations"] = max_iterations
+        run_calc = getattr(session.solution, "run_calculation", None)
+        if run_calc is not None and hasattr(run_calc, "iter_count"):
+            run_calc.iter_count = max_iterations
+
         return _ok(ok_message(
             f"求解器已配置：算法={scheme}，收敛标准={convergence_absolute}，"
             f"最大迭代={max_iterations}",
@@ -320,7 +361,7 @@ def initialize_fluent(
 # ---------------------------------------------------------------------------
 
 def run_fluent_simulation(
-    iterations: int = 300,
+    iterations: int | None = 300,
     report_interval: int = 10,
 ) -> dict:
     """
@@ -333,10 +374,33 @@ def run_fluent_simulation(
     try:
         session = _session()
         run_calc = session.solution.run_calculation
-        run_calc.iter_count = iterations
-        run_calc.iterate(iter_count=iterations)
+        warnings: list[str] = []
+        effective_iterations = (
+            iterations
+            if iterations is not None
+            else int(_fluent_runtime_config.get("max_iterations", 300))
+        )
+        run_calc.iter_count = effective_iterations
 
-        return _ok(ok_message(f"流体仿真计算完成（迭代 {iterations} 步）", iterations=iterations, report_interval=report_interval))
+        interval_applied = False
+        for attr_name in ("report_interval", "residual_report_interval"):
+            if hasattr(run_calc, attr_name):
+                setattr(run_calc, attr_name, report_interval)
+                interval_applied = True
+                break
+        if not interval_applied:
+            warnings.append("当前 Fluent API 未暴露 report_interval 字段，已忽略该参数")
+
+        run_calc.iterate(iter_count=effective_iterations)
+
+        return _ok(append_warnings(
+            ok_message(
+                f"流体仿真计算完成（迭代 {effective_iterations} 步）",
+                iterations=effective_iterations,
+                report_interval=report_interval,
+            ),
+            warnings,
+        ))
     except Exception as e:
         return _err(str(e))
 

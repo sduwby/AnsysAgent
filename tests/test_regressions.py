@@ -1833,6 +1833,120 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("当前工具仅支持", result["error"])
 
+    def test_setup_fluid_models_applies_length_scale_and_boundary_uses_defaults(self):
+        class _DummyBC:
+            def __init__(self):
+                self.momentum = types.SimpleNamespace(velocity=types.SimpleNamespace(value=None))
+                self.turbulence = types.SimpleNamespace(
+                    turbulent_intensity=None,
+                    hydraulic_diameter=None,
+                    turbulent_length_scale=None,
+                )
+                self.thermal = types.SimpleNamespace(temperature=types.SimpleNamespace(value=None))
+
+        viscous = types.SimpleNamespace(model=None, k_epsilon_model=None, k_omega_model=None, turbulent_length_scale=None)
+        setup = types.SimpleNamespace(
+            models=types.SimpleNamespace(viscous=viscous, energy=types.SimpleNamespace(enabled=False)),
+            boundary_conditions=types.SimpleNamespace(
+                velocity_inlet={"inlet": _DummyBC()},
+                pressure_inlet={},
+                pressure_outlet={},
+                wall={},
+            ),
+        )
+        session = types.SimpleNamespace(setup=setup)
+        original_cfg = dict(fluent_tools._fluent_runtime_config)
+        try:
+            with patch("tools.fluent_tools._session", return_value=session):
+                model_result = fluent_tools.setup_fluid_models(
+                    viscous_model="k-epsilon",
+                    k_epsilon_variant="realizable",
+                    turbulence_intensity=0.12,
+                    turbulent_length_scale=0.02,
+                )
+                bc_result = fluent_tools.define_boundary_conditions(
+                    boundary_name="inlet",
+                    bc_type="velocity-inlet",
+                    velocity_magnitude=5.0,
+                )
+            self.assertTrue(model_result["success"])
+            self.assertTrue(bc_result["success"])
+            self.assertEqual(viscous.turbulent_length_scale, 0.02)
+            inlet = setup.boundary_conditions.velocity_inlet["inlet"]
+            self.assertEqual(inlet.turbulence.turbulent_intensity, 0.12)
+            self.assertEqual(inlet.turbulence.turbulent_length_scale, 0.02)
+        finally:
+            fluent_tools._fluent_runtime_config.clear()
+            fluent_tools._fluent_runtime_config.update(original_cfg)
+
+    def test_setup_fluent_solver_and_run_apply_iteration_and_report_interval(self):
+        class _DummyRunCalculation:
+            def __init__(self):
+                self.iter_count = None
+                self.report_interval = None
+                self.iterate_calls = []
+
+            def iterate(self, iter_count):
+                self.iterate_calls.append(iter_count)
+
+        run_calc = _DummyRunCalculation()
+        residuals = types.SimpleNamespace(
+            equations={
+                "continuity": types.SimpleNamespace(absolute_criteria=None),
+                "x-velocity": types.SimpleNamespace(absolute_criteria=None),
+                "y-velocity": types.SimpleNamespace(absolute_criteria=None),
+                "z-velocity": types.SimpleNamespace(absolute_criteria=None),
+            }
+        )
+        session = types.SimpleNamespace(
+            solution=types.SimpleNamespace(
+                methods=types.SimpleNamespace(p_v_coupling=types.SimpleNamespace(flow_scheme=None)),
+                controls=types.SimpleNamespace(under_relaxation={}),
+                monitor=types.SimpleNamespace(residuals=residuals),
+                run_calculation=run_calc,
+            )
+        )
+
+        original_cfg = dict(fluent_tools._fluent_runtime_config)
+        try:
+            with patch("tools.fluent_tools._session", return_value=session):
+                solver_result = fluent_tools.setup_fluent_solver(max_iterations=123)
+                run_result = fluent_tools.run_fluent_simulation(iterations=None, report_interval=7)
+            self.assertTrue(solver_result["success"])
+            self.assertTrue(run_result["success"])
+            self.assertEqual(run_calc.iter_count, 123)
+            self.assertEqual(run_calc.report_interval, 7)
+            self.assertEqual(run_calc.iterate_calls, [123])
+        finally:
+            fluent_tools._fluent_runtime_config.clear()
+            fluent_tools._fluent_runtime_config.update(original_cfg)
+
+    def test_run_fluent_simulation_surfaces_warning_when_report_interval_unsupported(self):
+        class _DummyRunCalculation:
+            def __init__(self):
+                self.iter_count = None
+                self.iterate_calls = []
+
+            def iterate(self, iter_count):
+                self.iterate_calls.append(iter_count)
+
+        run_calc = _DummyRunCalculation()
+        session = types.SimpleNamespace(
+            solution=types.SimpleNamespace(run_calculation=run_calc)
+        )
+        original_cfg = dict(fluent_tools._fluent_runtime_config)
+        try:
+            fluent_tools._fluent_runtime_config["max_iterations"] = 88
+            with patch("tools.fluent_tools._session", return_value=session):
+                result = fluent_tools.run_fluent_simulation(iterations=None, report_interval=9)
+            self.assertTrue(result["success"])
+            self.assertEqual(result["result"]["iterations"], 88)
+            self.assertEqual(run_calc.iterate_calls, [88])
+            self.assertIn("warnings", result["result"])
+        finally:
+            fluent_tools._fluent_runtime_config.clear()
+            fluent_tools._fluent_runtime_config.update(original_cfg)
+
     def test_run_thermal_stress_analysis_rejects_nonuniform_temperature_map(self):
         csv_path = "/tmp/nonuniform_temperature.csv"
         Path(csv_path).write_text("x,y,z,temp\n0,0,0,20\n1,0,0,30\n", encoding="utf-8")
