@@ -25,6 +25,7 @@ try:
 except ImportError:
     _PTK_AVAILABLE = False
 
+from agent.commands import command_registry, CommandContext, DispatchResult
 from agent.config_manager import run_config_wizard
 from agent.logger import setup_logging, get_logger
 from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
@@ -118,22 +119,8 @@ def _maybe_show_startup_egg() -> None:
 # ---------------------------------------------------------------------------
 # /命令自动补全
 # ---------------------------------------------------------------------------
-
-_SLASH_COMMANDS = [
-    ("/help",   "查看帮助"),
-    ("/config", "配置 LLM 提供商和 API Key"),
-    ("/roles",  "管理 AI 角色（添加/修改/删除）"),
-    ("/skills", "管理专业流程技能"),
-    ("/mcp",    "管理 MCP server"),
-    ("/clear",  "清空对话历史，开始新对话"),
-    ("/new",    "清空对话历史，开始新对话"),
-    ("/purge",  "删除所有本地数据（不可撤销）"),
-    ("/clean",  "删除所有本地数据（不可撤销）"),
-    ("/exit",   "退出程序"),
-    ("/quit",   "退出程序"),
-    ("/coffee", "☕ 彩蛋"),
-    ("/motor",  "⚡ 彩蛋"),
-]
+# 注意：补全列表由 command_registry.slash_completion_list() 自动生成，
+# 无需手动维护 _SLASH_COMMANDS，命令注册区在文件末尾 _register_commands()。
 
 if _PTK_AVAILABLE:
     class _SlashCompleter(Completer):
@@ -144,9 +131,8 @@ if _PTK_AVAILABLE:
             if not text.startswith("/"):
                 return
             prefix = text.lower()
-            for cmd, desc in _SLASH_COMMANDS:
+            for cmd, desc in command_registry.slash_completion_list():
                 if cmd.startswith(prefix):
-                    # 补全从当前输入位置开始（替换已输入的部分）
                     yield Completion(
                         cmd,
                         start_position=-len(text),
@@ -621,6 +607,235 @@ def _stream_response(agent, user_input: str) -> str:
     return text_buf
 
 
+# ---------------------------------------------------------------------------
+# 命令处理函数（handlers）
+# 每个 handler 接受 CommandContext，返回 DispatchResult.* 常量。
+# 此处集中定义所有逻辑，通过 _register_commands() 注册到 command_registry。
+# ---------------------------------------------------------------------------
+
+def _handle_exit(ctx: CommandContext) -> str:
+    ctx.console.print("[dim]再见。[/dim]")
+    return DispatchResult.EXIT
+
+
+def _handle_coffee(ctx: CommandContext) -> str:
+    ctx.console.print(f"[yellow]{_COFFEE_ART}[/yellow]")
+    ctx.console.print("[bold yellow]⚡ 工程师加燃料完毕，继续仿真！[/bold yellow]")
+    return DispatchResult.HANDLED
+
+
+def _handle_motor(ctx: CommandContext) -> str:
+    ctx.console.print(f"[cyan]{_MOTOR_ART}[/cyan]")
+    ctx.console.print("[bold cyan]这就是你在仿真的东西，加油！💪[/bold cyan]")
+    return DispatchResult.HANDLED
+
+
+def _handle_help(ctx: CommandContext) -> str:
+    _show_help(ctx.console)
+    return DispatchResult.HANDLED
+
+
+def _make_config_handler(agent_ref) -> "Callable":
+    def _handle_config(ctx: CommandContext) -> str:
+        try:
+            run_config_wizard(ctx.console)
+            load_dotenv(override=True)
+            agent_ref.reload_config()
+            ctx.console.print("[green]✓ 配置已生效[/green]")
+            _log.info("LLM 配置已变更并热重载")
+        except Exception as e:
+            _log.error("配置变更失败: %s", e, exc_info=True)
+            ctx.console.print(f"[red]配置失败: {e}[/red]")
+        return DispatchResult.HANDLED
+    return _handle_config
+
+
+def _handle_roles(ctx: CommandContext) -> str:
+    try:
+        run_roles_wizard(ctx.console)
+        _log.info("用户完成 roles 管理")
+    except Exception as e:
+        _log.error("Roles 管理异常: %s", e, exc_info=True)
+        ctx.console.print(f"[red]Roles 操作失败: {e}[/red]")
+    return DispatchResult.HANDLED
+
+
+def _handle_skills(ctx: CommandContext) -> str:
+    try:
+        run_skills_wizard(ctx.console)
+        _log.info("用户完成 skills 管理")
+    except Exception as e:
+        _log.error("Skills 管理异常: %s", e, exc_info=True)
+        ctx.console.print(f"[red]Skills 操作失败: {e}[/red]")
+    return DispatchResult.HANDLED
+
+
+def _make_mcp_handler(agent_ref) -> "Callable":
+    def _handle_mcp(ctx: CommandContext) -> str:
+        try:
+            mcp_mgr = agent_ref._mcp if hasattr(agent_ref, "_mcp") else None
+            run_mcp_wizard(ctx.console, mcp_mgr)
+            _log.info("用户完成 MCP 管理")
+        except Exception as e:
+            _log.error("MCP 管理异常: %s", e, exc_info=True)
+            ctx.console.print(f"[red]MCP 操作失败: {e}[/red]")
+        return DispatchResult.HANDLED
+    return _handle_mcp
+
+
+def _make_clear_handler(agent_ref) -> "Callable":
+    def _handle_clear(ctx: CommandContext) -> str:
+        agent_ref.history.clear()
+        _log.info("用户清空对话历史")
+        ctx.console.print("[dim]✓ 对话历史已清空，开始新对话。[/dim]")
+        return DispatchResult.HANDLED
+    return _handle_clear
+
+
+def _handle_purge(ctx: CommandContext) -> str:
+    import shutil
+    from agent.paths import ANSYS_DATA_DIR
+    ctx.console.print(Panel(
+        f"  即将删除：[bold red]{ANSYS_DATA_DIR}[/bold red]\n"
+        "  包含：.env（LLM 配置）、.rag（知识索引）、logs（日志）、\n"
+        "        roles（角色）、skills（技能）、knowledge（用户知识库）、mcp_servers.json",
+        title="[bold red]⚠ 警告：此操作不可撤销[/bold red]",
+        border_style="red",
+        padding=(0, 2),
+    ))
+    confirm = Prompt.ask(
+        "  确认删除所有本地数据？输入 [bold red]yes[/bold red] 继续",
+        default="no",
+    ).strip().lower()
+    if confirm == "yes":
+        try:
+            shutil.rmtree(ANSYS_DATA_DIR)
+            _log.info("用户清除了所有本地数据: %s", ANSYS_DATA_DIR)
+            ctx.console.print(
+                f"[green]✓ 已删除 {ANSYS_DATA_DIR}，程序将退出（下次启动将重新初始化）。[/green]"
+            )
+            return DispatchResult.EXIT
+        except Exception as e:
+            _log.error("清除本地数据失败: %s", e, exc_info=True)
+            ctx.console.print(f"[red]删除失败: {e}[/red]")
+    else:
+        ctx.console.print("[dim]  已取消。[/dim]")
+    return DispatchResult.HANDLED
+
+
+def _make_status_handler(agent_ref) -> "Callable":
+    """
+    /status — 显示当前会话状态：模型、历史记录条数、估算 token 数、MCP 连接状况。
+    映射自 agent.chat_stream / history / model 等属性。
+    """
+    def _handle_status(ctx: CommandContext) -> str:
+        from agent.chat_agent import _estimate_tokens
+        hist = getattr(agent_ref, "history", [])
+        model = getattr(agent_ref, "model", "未知")
+        provider = getattr(agent_ref, "_primary_provider", "未知")
+        token_est = _estimate_tokens(hist) if hist else 0
+
+        # MCP 状态
+        mcp_line = "不可用"
+        try:
+            mcp_mgr = getattr(agent_ref, "_mcp", None)
+            if mcp_mgr and getattr(mcp_mgr, "_available", False):
+                servers = mcp_mgr.get_server_info()
+                connected = sum(1 for s in servers if s.get("connected"))
+                total = len(servers)
+                mcp_line = f"{connected}/{total} server 已连接"
+            elif mcp_mgr:
+                mcp_line = "mcp 包未安装"
+        except Exception:
+            pass
+
+        ctx.console.print(Panel(
+            f"  [bold]模型[/bold]       {model}  [dim]({provider})[/dim]\n"
+            f"  [bold]历史记录[/bold]   {len(hist)} 条消息\n"
+            f"  [bold]估算 token[/bold] {token_est:,}\n"
+            f"  [bold]MCP[/bold]        {mcp_line}",
+            title="📊 当前会话状态",
+            border_style="cyan",
+            padding=(0, 2),
+        ))
+        return DispatchResult.HANDLED
+    return _handle_status
+
+
+def _make_history_handler(agent_ref) -> "Callable":
+    """
+    /history [n] — 显示最近 n 条对话记录（默认 5 条）。
+    映射自 agent.history 列表。
+    """
+    def _handle_history(ctx: CommandContext) -> str:
+        try:
+            n = int(ctx.args) if ctx.args.strip().isdigit() else 5
+        except (ValueError, AttributeError):
+            n = 5
+        n = max(1, min(n, 50))   # 限制 1–50 条
+
+        hist = getattr(agent_ref, "history", [])
+        recent = hist[-n:]
+        if not recent:
+            ctx.console.print("[dim]  （对话历史为空）[/dim]")
+            return DispatchResult.HANDLED
+
+        lines = []
+        for msg in recent:
+            role = msg.get("role", "?")
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                # tool_calls / multipart content
+                content = " ".join(
+                    (b.get("text") or b.get("content") or "")
+                    for b in content if isinstance(b, dict)
+                )
+            snippet = content[:120].replace("\n", " ")
+            if len(content) > 120:
+                snippet += "…"
+            color = "green" if role == "user" else ("cyan" if role == "assistant" else "dim")
+            lines.append(f"  [{color}]{role}[/{color}]  {snippet}")
+
+        ctx.console.print(Panel(
+            "\n".join(lines),
+            title=f"📜 最近 {len(recent)} 条对话记录（共 {len(hist)} 条）",
+            border_style="dim",
+            padding=(0, 1),
+        ))
+        return DispatchResult.HANDLED
+    return _handle_history
+
+
+def _register_commands(agent) -> None:
+    """
+    向全局 command_registry 注册所有斜杠命令。
+    需要引用 agent 实例的命令通过工厂函数（_make_*_handler）捕获。
+
+    注意：此函数在每次 cli() 调用时执行（agent 实例创建之后）。
+    若 cli() 被多次调用（测试场景），可能产生重复注册；
+    生产路径下 cli() 只调用一次，不成问题。
+    """
+    from typing import Callable  # noqa: F401
+
+    r = command_registry
+
+    r.register("/exit",    "退出程序",                         _handle_exit,
+               aliases=["/quit"])
+    r.register("/help",    "查看功能指南",                     _handle_help)
+    r.register("/config",  "配置 LLM 提供商和 API Key",        _make_config_handler(agent))
+    r.register("/roles",   "管理 AI 角色（添加/修改/删除）",   _handle_roles)
+    r.register("/skills",  "管理专业流程技能",                  _handle_skills)
+    r.register("/mcp",     "管理 MCP server",                  _make_mcp_handler(agent))
+    r.register("/clear",   "清空对话历史，开始新对话",           _make_clear_handler(agent),
+               aliases=["/new"])
+    r.register("/purge",   "删除所有本地数据（不可撤销）",       _handle_purge,
+               aliases=["/clean"])
+    r.register("/status",  "显示当前会话状态（模型/历史/MCP）",  _make_status_handler(agent))
+    r.register("/history", "查看最近对话记录（可指定条数）",     _make_history_handler(agent))
+    r.register("/coffee",  "☕ 彩蛋",                           _handle_coffee)
+    r.register("/motor",   "⚡ 彩蛋",                           _handle_motor)
+
+
 @click.command()
 @click.version_option(VERSION, prog_name="ansys-agent")
 @click.option(
@@ -633,6 +848,10 @@ def cli(prompt: str | None):
     from agent.chat_agent import ChatAgent
 
     agent = ChatAgent()
+
+    # 命令注册（依赖 agent 实例捕获）
+    _register_commands(agent)
+
     try:
         if prompt:
             # 单次执行模式：ansys-agent -p "..."
@@ -667,87 +886,29 @@ def cli(prompt: str | None):
 
             if not user_input:
                 continue
-            if user_input.lower() in ("/exit", "/quit", "quit", "exit", "q", "退出"):
+
+            # 兼容无 / 前缀的快捷词
+            _lower = user_input.lower()
+            if _lower in ("quit", "exit", "q", "退出"):
                 console.print("[dim]再见。[/dim]")
                 _log.info("用户主动退出")
                 break
-            if user_input.lower() == "/coffee":
-                console.print(f"[yellow]{_COFFEE_ART}[/yellow]")
-                console.print("[bold yellow]⚡ 工程师加燃料完毕，继续仿真！[/bold yellow]")
-                continue
-            if user_input.lower() == "/motor":
-                console.print(f"[cyan]{_MOTOR_ART}[/cyan]")
-                console.print("[bold cyan]这就是你在仿真的东西，加油！💪[/bold cyan]")
-                continue
-            if user_input.lower() == "/config":
-                try:
-                    run_config_wizard(console)
-                    # 热重载 .env → 覆盖 os.environ → 重建 LLM 客户端
-                    load_dotenv(override=True)
-                    agent.reload_config()
-                    console.print("[green]✓ 配置已生效[/green]")
-                    _log.info("LLM 配置已变更并热重载")
-                except Exception as e:
-                    _log.error("配置变更失败: %s", e, exc_info=True)
-                    console.print(f"[red]配置失败: {e}[/red]")
-                continue
-            if user_input.lower() == "/roles":
-                try:
-                    run_roles_wizard(console)
-                    _log.info("用户完成 roles 管理")
-                except Exception as e:
-                    _log.error("Roles 管理异常: %s", e, exc_info=True)
-                    console.print(f"[red]Roles 操作失败: {e}[/red]")
-                continue
-            if user_input.lower() == "/skills":
-                try:
-                    run_skills_wizard(console)
-                    _log.info("用户完成 skills 管理")
-                except Exception as e:
-                    _log.error("Skills 管理异常: %s", e, exc_info=True)
-                    console.print(f"[red]Skills 操作失败: {e}[/red]")
-                continue
-            if user_input.lower() == "/mcp":
-                try:
-                    run_mcp_wizard(console, agent._mcp_manager if hasattr(agent, "_mcp_manager") else None)
-                    _log.info("用户完成 MCP 管理")
-                except Exception as e:
-                    _log.error("MCP 管理异常: %s", e, exc_info=True)
-                    console.print(f"[red]MCP 操作失败: {e}[/red]")
-                continue
-            if user_input.lower() == "/help":
-                _show_help(console)
-                continue
-            if user_input.lower() in ("/clear", "/new", "新建对话"):
-                agent.history.clear()
-                _log.info("用户清空对话历史")
-                console.print("[dim]✓ 对话历史已清空，开始新对话。[/dim]")
-                continue
-            if user_input.lower() in ("/purge", "/clean", "清除本地数据"):
-                from agent.paths import ANSYS_DATA_DIR
-                import shutil
-                console.print(Panel(
-                    f"  即将删除：[bold red]{ANSYS_DATA_DIR}[/bold red]\n"
-                    "  包含：.env（LLM 配置）、.rag（知识索引）、logs（日志）、\n"
-                    "        roles（角色）、skills（技能）、knowledge（用户知识库）、mcp_servers.json",
-                    title="[bold red]⚠ 警告：此操作不可撤销[/bold red]",
-                    border_style="red",
-                    padding=(0, 2),
-                ))
-                confirm = Prompt.ask("  确认删除所有本地数据？输入 [bold red]yes[/bold red] 继续", default="no").strip().lower()
-                if confirm == "yes":
-                    try:
-                        shutil.rmtree(ANSYS_DATA_DIR)
-                        _log.info("用户清除了所有本地数据: %s", ANSYS_DATA_DIR)
-                        console.print(f"[green]✓ 已删除 {ANSYS_DATA_DIR}，程序将退出（下次启动将重新初始化）。[/green]")
-                        break
-                    except Exception as e:
-                        _log.error("清除本地数据失败: %s", e, exc_info=True)
-                        console.print(f"[red]删除失败: {e}[/red]")
-                else:
-                    console.print("[dim]  已取消。[/dim]")
+            if _lower == "新建对话":
+                user_input = "/clear"
+            elif _lower == "清除本地数据":
+                user_input = "/purge"
+
+            # 通过注册表统一分发
+            ctx = CommandContext(console=console, agent=agent)
+            result = command_registry.dispatch(user_input, ctx)
+
+            if result == DispatchResult.EXIT:
+                _log.info("命令触发退出")
+                break
+            elif result == DispatchResult.HANDLED:
                 continue
 
+            # NOT_A_COMMAND → 转发给 LLM
             _log.info("用户输入: %s", user_input)
             try:
                 reply = _stream_response(agent, user_input)
