@@ -25,11 +25,29 @@ import os
 from pathlib import Path
 
 
+def _is_writable_dir(path: Path) -> bool:
+    """通过创建临时探针文件判断目录是否可写。"""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def _resolve_data_dir() -> Path:
     custom_dir = os.getenv("ANSYS_AGENT_HOME", "").strip()
     if custom_dir:
         return Path(custom_dir).expanduser()
-    return Path.home() / ".AnsysAgent"
+
+    home_dir = Path.home() / ".AnsysAgent"
+    if _is_writable_dir(home_dir):
+        return home_dir
+
+    # 在受限环境（如测试沙箱）中，回退到当前工作目录，避免写入用户目录失败。
+    return Path.cwd() / ".ansysagent"
 
 
 ANSYS_DATA_DIR: Path = _resolve_data_dir()

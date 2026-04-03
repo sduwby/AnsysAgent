@@ -41,7 +41,7 @@ def delegate_to_agent(agent_name: str, task: str, context: str = "") -> dict:
         }
 
     _log.info("委托任务给 [%s]: %s", agent_name, task[:100])
-    result = agent.execute(task=task, context=context or "")
+    result = agent.run(task=task, context=context or "")
     _log.info("[%s] 完成，步骤数: %d，成功: %s",
               agent_name, len(result.get("steps", [])), result.get("success"))
     return result

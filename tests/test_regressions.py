@@ -73,6 +73,7 @@ openai_stub.APIStatusError = _DummyAPIStatusError
 sys.modules.setdefault("openai", openai_stub)
 
 from agent import chat_agent, config_manager, tool_definitions
+from agent import omagent_runtime, sub_agent_base
 from tools import circuit_tools, coupling_tools, dynamic_reporting_tools, fluent_tools, icepak_tools, knowledge_tools, mapdl_tools, maxwell_tools, mechanical_tools, motorcad_tools, project_tools, report_tools, rmxprt_tools, sweep_tools
 from tools import result_tools, utils as tool_utils, visualization_tools
 from rag import ingest as rag_ingest
@@ -458,6 +459,318 @@ class RegressionTests(unittest.TestCase):
         messages = agent._compose_messages(context)
         self.assertEqual(context, "")
         self.assertEqual(len(messages), 2)
+
+    def test_omagent_tool_loop_runs_to_completion(self):
+        calls = []
+
+        class _Message:
+            def __init__(self, content="", tool_calls=None):
+                self.content = content
+                self.tool_calls = tool_calls
+
+            def model_dump(self, exclude_unset=False):
+                data = {"role": "assistant", "content": self.content}
+                if self.tool_calls:
+                    data["tool_calls"] = self.tool_calls
+                return data
+
+        class _ToolCall:
+            def __init__(self, name, arguments, call_id="call_1"):
+                self.id = call_id
+                self.function = types.SimpleNamespace(name=name, arguments=arguments)
+
+        responses = [
+            types.SimpleNamespace(choices=[types.SimpleNamespace(message=_Message(tool_calls=[
+                _ToolCall("demo_tool", '{"value": 1}')
+            ]))]),
+            types.SimpleNamespace(choices=[types.SimpleNamespace(message=_Message(content="finished"))]),
+        ]
+
+        def _llm_invoke(context):
+            return responses.pop(0)
+
+        def _tool_invoke(name, args, context):
+            calls.append((name, args))
+            return json.dumps({"success": True, "result": "ok"}, ensure_ascii=False)
+
+        workflow = omagent_runtime.OmAgentWorkflow(
+            name="demo",
+            nodes=[omagent_runtime.ToolLoopNode(llm_invoke=_llm_invoke, tool_invoke=_tool_invoke)],
+        )
+        result = workflow.run(omagent_runtime.OmAgentContext(task="demo"))
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "finished")
+        self.assertEqual(calls, [("demo_tool", {"value": 1})])
+        self.assertEqual(len(result.steps), 1)
+
+    def test_planning_and_summary_nodes_mark_completion(self):
+        context = omagent_runtime.OmAgentContext(task="demo")
+        workflow = omagent_runtime.OmAgentWorkflow(
+            name="meta",
+            nodes=[
+                omagent_runtime.PlanningNode(lambda ctx: ctx.metadata.update({"plan": "ok"})),
+                omagent_runtime.SummaryNode(lambda ctx: ctx.metadata.update({"summary": "ok"})),
+            ],
+        )
+        result = workflow.run(context)
+        self.assertFalse(result.success)
+        self.assertTrue(context.metadata["planning_completed"])
+        self.assertTrue(context.metadata["summary_completed"])
+        self.assertEqual(context.metadata["plan"], "ok")
+        self.assertEqual(context.metadata["summary"], "ok")
+
+    def test_sub_agent_base_execute_uses_workflow_runtime(self):
+        class _DemoSubAgent(sub_agent_base.SubAgentBase):
+            name = "demo"
+            description = "Demo Agent"
+
+        agent = _DemoSubAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+            tool_definitions=[],
+            tool_registry={},
+        )
+        with patch.object(_DemoSubAgent, "_call_llm", return_value=types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(
+                content="workflow ok",
+                tool_calls=None,
+                model_dump=lambda exclude_unset=False: {"role": "assistant", "content": "workflow ok"},
+            ))]
+        )):
+            result = agent.execute("test task")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["agent"], "demo")
+        self.assertEqual(result["result"], "workflow ok")
+        self.assertIn("metadata", result)
+        self.assertEqual(result["metadata"]["agent_name"], "demo")
+        self.assertEqual(result["metadata"]["workflow_stages"], ["plan", "execute", "summarize"])
+        self.assertEqual(result["metadata"]["num_steps"], 0)
+        self.assertEqual(result["metadata"]["final_summary"], "workflow ok")
+        self.assertTrue(result["metadata"]["planning_completed"])
+        self.assertTrue(result["metadata"]["summary_completed"])
+
+    def test_sub_agent_prepare_run_context_sets_execution_plan(self):
+        class _DemoSubAgent(sub_agent_base.SubAgentBase):
+            name = "demo"
+            description = "Demo Agent"
+            workflow_stages = ("plan", "configure", "solve", "summarize")
+
+        agent = _DemoSubAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+            tool_definitions=[{"function": {"name": "tool_a"}}, {"function": {"name": "tool_b"}}],
+            tool_registry={},
+        )
+        run_context = omagent_runtime.OmAgentContext(task="do work")
+        agent.prepare_run_context(run_context, "do work", "ctx")
+        self.assertEqual(run_context.metadata["agent_name"], "demo")
+        self.assertEqual(run_context.metadata["workflow_stages"], ["plan", "configure", "solve", "summarize"])
+        self.assertIn("do work", run_context.metadata["execution_plan"])
+        self.assertIn("tool_a", run_context.metadata["execution_plan"])
+        self.assertIn("阶段", run_context.metadata["stage_guidance"])
+        self.assertEqual(run_context.messages[0]["role"], "system")
+        self.assertEqual(run_context.messages[1]["role"], "system")
+        self.assertEqual(run_context.messages[2]["role"], "user")
+
+    def test_maxwell_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.maxwell_agent import MaxwellAgent
+
+        agent = MaxwellAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="帮我提取 back emf")
+        agent.prepare_run_context(run_context, "帮我提取 back emf")
+        self.assertEqual(run_context.metadata["maxwell_flow"], "transient_postprocess")
+        self.assertIn("Back EMF", run_context.metadata["execution_plan"])
+        self.assertIn("Maxwell 工作流类型", run_context.metadata["stage_guidance"])
+        self.assertEqual(run_context.messages[1]["role"], "system")
+
+    def test_maxwell_agent_finalize_run_context_prefixes_summary(self):
+        from agent.sub_agents.maxwell_agent import MaxwellAgent
+
+        agent = MaxwellAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(
+            task="demo",
+            steps=[{"tool": "connect_aedt"}, {"tool": "get_back_emf"}],
+            metadata={"maxwell_flow": "transient_postprocess"},
+            output="已导出波形",
+            success=True,
+        )
+        agent.finalize_run_context(run_context)
+        self.assertEqual(run_context.output, "[transient_postprocess] 已导出波形")
+        self.assertEqual(run_context.metadata["tools_used"], ["connect_aedt", "get_back_emf"])
+
+    def test_icepak_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.icepak_agent import IcepakAgent
+
+        agent = IcepakAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="帮我做电磁热耦合温升分析")
+        agent.prepare_run_context(run_context, "帮我做电磁热耦合温升分析")
+        self.assertEqual(run_context.metadata["icepak_flow"], "em_thermal_coupling")
+        self.assertIn("Icepak 工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_fluent_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.fluent_agent import FluentAgent
+
+        agent = FluentAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="读取 mesh 并检查流体边界")
+        agent.prepare_run_context(run_context, "读取 mesh 并检查流体边界")
+        self.assertEqual(run_context.metadata["fluent_flow"], "mesh_preparation")
+        self.assertIn("Fluent 工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_mapdl_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.mapdl_agent import MapdlAgent
+
+        agent = MapdlAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="做模态和谐响应 nvh 分析")
+        agent.prepare_run_context(run_context, "做模态和谐响应 nvh 分析")
+        self.assertEqual(run_context.metadata["mapdl_flow"], "nvh_analysis")
+        self.assertIn("MAPDL 工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_motorcad_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.motorcad_agent import MotorCADAgent
+
+        agent = MotorCADAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="把设计导出到 maxwell")
+        agent.prepare_run_context(run_context, "把设计导出到 maxwell")
+        self.assertEqual(run_context.metadata["motorcad_flow"], "export_to_maxwell")
+        self.assertIn("Motor-CAD 工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_optimization_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.optimization_agent import OptimizationAgent
+
+        agent = OptimizationAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="做二维 sweep 和 efficiency map")
+        agent.prepare_run_context(run_context, "做二维 sweep 和 efficiency map")
+        self.assertEqual(run_context.metadata["optimization_flow"], "parametric_sweep")
+        self.assertIn("优化工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_reporting_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.reporting_agent import ReportingAgent
+
+        agent = ReportingAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="导出 pdf 报告")
+        agent.prepare_run_context(run_context, "导出 pdf 报告")
+        self.assertEqual(run_context.metadata["reporting_flow"], "report_export")
+        self.assertIn("报告工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_domain_agents_finalize_prefix_summary(self):
+        cases = [
+            ("agent.sub_agents.icepak_agent", "IcepakAgent", "icepak_flow", "em_thermal_coupling"),
+            ("agent.sub_agents.fluent_agent", "FluentAgent", "fluent_flow", "cfd_solve"),
+            ("agent.sub_agents.mapdl_agent", "MapdlAgent", "mapdl_flow", "nvh_analysis"),
+            ("agent.sub_agents.motorcad_agent", "MotorCADAgent", "motorcad_flow", "export_to_maxwell"),
+            ("agent.sub_agents.optimization_agent", "OptimizationAgent", "optimization_flow", "parametric_sweep"),
+            ("agent.sub_agents.reporting_agent", "ReportingAgent", "reporting_flow", "report_export"),
+        ]
+        for module_name, class_name, metadata_key, flow in cases:
+            module = __import__(module_name, fromlist=[class_name])
+            cls = getattr(module, class_name)
+            agent = cls(
+                client=openai_stub.OpenAI(),
+                model="dummy-model",
+                fallback_clients=[],
+            )
+            run_context = omagent_runtime.OmAgentContext(
+                task="demo",
+                steps=[{"tool": "demo_tool"}],
+                metadata={metadata_key: flow},
+                output="已完成",
+                success=True,
+            )
+            agent.finalize_run_context(run_context)
+            self.assertEqual(run_context.output, f"[{flow}] 已完成")
+            self.assertEqual(run_context.metadata["tools_used"], ["demo_tool"])
+
+    def test_streaming_tool_loop_yields_text_and_tool_result(self):
+        class _Chunk:
+            def __init__(self, content=None, tool_calls=None):
+                delta = types.SimpleNamespace(content=content, tool_calls=tool_calls)
+                self.choices = [types.SimpleNamespace(delta=delta)]
+
+        class _ToolDelta:
+            def __init__(self, index, call_id=None, name=None, arguments=None):
+                self.index = index
+                self.id = call_id
+                self.function = types.SimpleNamespace(name=name, arguments=arguments)
+
+        responses = [
+            [
+                _Chunk(content="he"),
+                _Chunk(content="llo"),
+                _Chunk(tool_calls=[_ToolDelta(0, call_id="call_1", name="demo_tool", arguments='{"x": 1}')]),
+            ],
+            [
+                _Chunk(content="done"),
+            ],
+        ]
+
+        def _llm_stream_invoke(context):
+            return responses.pop(0)
+
+        calls = []
+
+        def _tool_invoke(name, args, context):
+            calls.append((name, args))
+            return json.dumps({"success": True, "result": "ok"}, ensure_ascii=False)
+
+        node = omagent_runtime.StreamingToolLoopNode(
+            llm_stream_invoke=_llm_stream_invoke,
+            tool_invoke=_tool_invoke,
+            before_tool=lambda name, args, ctx: f"TOOL:{name}",
+            after_tool=lambda name, args, result, ctx: "RESULT:ok",
+        )
+        context = omagent_runtime.OmAgentContext(task="demo")
+        chunks = list(node.stream(context))
+        self.assertEqual(chunks, ["he", "llo", "TOOL:demo_tool", "RESULT:ok", "done"])
+        self.assertEqual(calls, [("demo_tool", {"x": 1})])
+        self.assertTrue(context.success)
+        self.assertEqual(context.output, "done")
+
+    def test_chat_agent_prepare_chat_context_sets_messages(self):
+        agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)
+        agent.history = []
+        with patch.object(agent, "_maybe_compress_history", return_value=None), \
+             patch.object(agent, "_build_knowledge_context", return_value="knowledge"), \
+             patch.object(agent, "_compose_messages", return_value=[{"role": "system", "content": "knowledge"}]):
+            run_context = omagent_runtime.OmAgentContext(task="hello")
+            agent._prepare_chat_context(run_context, tools=[{"type": "function"}])
+        self.assertEqual(agent.history[0]["content"], "hello")
+        self.assertEqual(run_context.knowledge_context, "knowledge")
+        self.assertEqual(run_context.messages, [{"role": "system", "content": "knowledge"}])
+        self.assertEqual(run_context.metadata["tools"], [{"type": "function"}])
 
     def test_list_designs_accepts_design_list_property(self):
         app = DummyProjectApp(["Design1", "Design2"])

@@ -21,6 +21,13 @@ from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
 from agent.logger import get_logger
 from agent import dispatcher
+from agent.omagent_runtime import (
+    FunctionNode,
+    OmAgentContext,
+    OmAgentWorkflow,
+    StreamingToolLoopNode,
+    ToolLoopNode,
+)
 from agent.role_manager import RoleManager
 from agent.mcp_manager import MCPManager
 from agent.sub_agents import (
@@ -401,131 +408,177 @@ class ChatAgent:
             _log.error("工具 %s 执行异常: %s", tool_name, e, exc_info=True)
             return json.dumps({"success": False, "error": str(e)})
 
+    def _build_chat_workflow(self, tools: list[dict]) -> OmAgentWorkflow:
+        """构造 Main Agent 的 OmAgent 风格工作流。"""
+
+        def _invoke_llm(run_context: OmAgentContext):
+            def _create(client: OpenAI, model: str, **kwargs):
+                return client.chat.completions.create(model=model, **kwargs)
+
+            return self._call_with_fallback(
+                _create,
+                max_tokens=4096,
+                messages=run_context.messages,
+                tools=tools,
+                tool_choice="auto",
+            )
+
+        def _invoke_tool(tool_name: str, tool_input: dict[str, Any], _run_context: OmAgentContext) -> str:
+            return self._execute_tool(tool_name, tool_input)
+
+        def _on_assistant_message(message: dict[str, Any], _run_context: OmAgentContext) -> None:
+            self.history.append(message)
+
+        def _before_tool(tool_name: str, tool_args: dict[str, Any], _run_context: OmAgentContext) -> None:
+            if tool_name == "delegate_to_agent":
+                console.print(
+                    f"[dim]🤖 委托给 [bold]{tool_args.get('agent_name')}[/bold] Sub-Agent: "
+                    f"{tool_args.get('task', '')[:80]}...[/dim]"
+                )
+                return
+            console.print(
+                f"[dim]🔧 调用工具: [bold]{tool_name}[/bold] "
+                f"{json.dumps(tool_args, ensure_ascii=False)}[/dim]"
+            )
+
+        def _after_tool(tool_name: str, tool_args: dict[str, Any], result_str: str, run_context: OmAgentContext) -> None:
+            try:
+                result_data = json.loads(result_str)
+            except json.JSONDecodeError:
+                result_data = {}
+            if result_data.get("success"):
+                console.print(f"[green]  ✓ {result_data.get('result', 'OK')[:200]}[/green]")
+            else:
+                console.print(f"[red]  ✗ {result_data.get('error', '错误')}[/red]")
+            self.history.append({
+                "role": "tool",
+                "tool_call_id": run_context.messages[-1].get("tool_call_id", ""),
+                "content": result_str,
+            })
+
+        def _record_step(tool_name: str, tool_args: dict[str, Any], result_str: str, _run_context: OmAgentContext) -> dict[str, Any]:
+            try:
+                result_data = json.loads(result_str)
+            except json.JSONDecodeError:
+                result_data = {}
+            return {
+                "tool": tool_name,
+                "args": tool_args,
+                "result": result_data.get("result") if isinstance(result_data, dict) else result_str[:500],
+                "success": result_data.get("success") if isinstance(result_data, dict) else None,
+            }
+
+        return OmAgentWorkflow(
+            name="main_agent_workflow",
+            nodes=[
+                FunctionNode(
+                    lambda run_context: self._prepare_chat_context(run_context, tools),
+                    name="prepare_chat_context",
+                ),
+                ToolLoopNode(
+                    llm_invoke=_invoke_llm,
+                    tool_invoke=_invoke_tool,
+                    max_turns=30,
+                    on_assistant_message=_on_assistant_message,
+                    before_tool=_before_tool,
+                    after_tool=_after_tool,
+                    step_recorder=_record_step,
+                )
+            ],
+        )
+
+    def _build_chat_stream_workflow(self, tools: list[dict]) -> OmAgentWorkflow:
+        """构造 Main Agent 的流式 OmAgent workflow。"""
+
+        def _invoke_stream(run_context: OmAgentContext):
+            def _create_stream(client: OpenAI, model: str, **kwargs):
+                return client.chat.completions.create(model=model, stream=True, **kwargs)
+
+            return self._call_with_fallback(
+                _create_stream,
+                max_tokens=4096,
+                messages=run_context.messages,
+                tools=tools,
+                tool_choice="auto",
+            )
+
+        def _invoke_tool(tool_name: str, tool_input: dict[str, Any], _run_context: OmAgentContext) -> str:
+            return self._execute_tool(tool_name, tool_input)
+
+        def _on_assistant_message(message: dict[str, Any], _run_context: OmAgentContext) -> None:
+            self.history.append(message)
+
+        def _before_tool(tool_name: str, tool_args: dict[str, Any], _run_context: OmAgentContext) -> str | None:
+            return f"\x00TOOL\x00{tool_name}:{json.dumps(tool_args, ensure_ascii=False)}"
+
+        def _after_tool(tool_name: str, tool_args: dict[str, Any], result_str: str, _run_context: OmAgentContext) -> str | None:
+            try:
+                result_data = json.loads(result_str)
+            except json.JSONDecodeError:
+                result_data = {}
+            status = "✓" if result_data.get("success") else "✗"
+            detail = result_data.get("result") or result_data.get("error") or ""
+            self.history.append({
+                "role": "tool",
+                "tool_call_id": _run_context.messages[-1].get("tool_call_id", ""),
+                "content": result_str,
+            })
+            return f"\x00TOOL_RESULT\x00{status} {detail}"
+
+        return OmAgentWorkflow(
+            name="main_agent_stream_workflow",
+            nodes=[
+                FunctionNode(
+                    lambda run_context: self._prepare_chat_context(run_context, tools),
+                    name="prepare_chat_context",
+                ),
+                StreamingToolLoopNode(
+                    llm_stream_invoke=_invoke_stream,
+                    tool_invoke=_invoke_tool,
+                    max_turns=30,
+                    on_assistant_message=_on_assistant_message,
+                    before_tool=_before_tool,
+                    after_tool=_after_tool,
+                ),
+            ],
+        )
+
+    def _prepare_chat_context(self, run_context: OmAgentContext, tools: list[dict]) -> None:
+        """统一准备主对话上下文，供同步/流式 workflow 共用。"""
+        self.history.append({"role": "user", "content": run_context.task})
+        self._maybe_compress_history()
+        knowledge_context = self._build_knowledge_context(run_context.task)
+        run_context.knowledge_context = knowledge_context
+        run_context.messages = list(self._compose_messages(knowledge_context))
+        run_context.metadata["tools"] = tools
+
     def chat(self, user_message: str) -> str:
         """发送用户消息，返回最终 Assistant 回复（非流式）。"""
-        self.history.append({"role": "user", "content": user_message})
-        self._maybe_compress_history()
-        knowledge_context = self._build_knowledge_context(user_message)
-
         # Main-Agent 工具：delegate_to_agent + 跨软件协调工具 + 知识工具 + 技能工具（动态）
         main_tools = [t for t in MAIN_TOOL_DEFINITIONS if t["function"]["name"] != "use_skill"]
         _tools = [DELEGATE_TOOL_DEFINITION] + main_tools + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
 
-        def _create(client: OpenAI, model: str, **kwargs):
-            return client.chat.completions.create(model=model, **kwargs)
-
-        while True:
-            response = self._call_with_fallback(
-                _create,
-                max_tokens=4096,
-                messages=self._compose_messages(knowledge_context),
-                tools=_tools,
-                tool_choice="auto",
-            )
-
-            msg = response.choices[0].message
-
-            # 将 assistant 消息加入历史
-            self.history.append(msg.model_dump(exclude_unset=False))
-
-            # 没有工具调用，直接返回文本
-            if not msg.tool_calls:
-                return msg.content or ""
-
-            # 执行所有工具调用
-            for tool_call in msg.tool_calls:
-                fn_name = tool_call.function.name
-                # 修复：json.loads 加异常处理，避免 LLM 返回格式错误时崩溃
-                try:
-                    fn_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    _log.warning("工具 %s 参数解析失败，跳过: %s", fn_name, tool_call.function.arguments)
-                    fn_args = {}
-                if fn_name == "delegate_to_agent":
-                    console.print(
-                        f"[dim]🤖 委托给 [bold]{fn_args.get('agent_name')}[/bold] Sub-Agent: "
-                        f"{fn_args.get('task', '')[:80]}...[/dim]"
-                    )
-                else:
-                    console.print(
-                        f"[dim]🔧 调用工具: [bold]{fn_name}[/bold] "
-                        f"{json.dumps(fn_args, ensure_ascii=False)}[/dim]"
-                    )
-                result_str = self._execute_tool(fn_name, fn_args)
-                try:
-                    result_data = json.loads(result_str)
-                except json.JSONDecodeError:
-                    result_data = {}
-                if result_data.get("success"):
-                    console.print(f"[green]  ✓ {result_data.get('result', 'OK')[:200]}[/green]")
-                else:
-                    console.print(f"[red]  ✗ {result_data.get('error', '错误')}[/red]")
-
-                # 将工具结果追加到历史
-                self.history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result_str,
-                })
+        run_context = OmAgentContext(
+            task=user_message,
+            metadata={},
+        )
+        result = self._build_chat_workflow(_tools).run(run_context)
+        if result.success:
+            return result.output
+        raise RuntimeError(result.error or "Main Agent workflow 执行失败")
 
     def chat_stream(self, user_message: str):
         """
-        流式对话：生成器，逐 token yield 文本片段。
-        工具调用期间会 yield 特殊前缀 '\x00TOOL\x00' 开头的状态行。
-        """
-        self.history.append({"role": "user", "content": user_message})
-        self._maybe_compress_history()
-        knowledge_context = self._build_knowledge_context(user_message)
+        全程流式对话：生成器，逐 token yield 文本片段。
+        工具调用期间会 yield 特殊前缀 '\x00TOOL\x00' / '\x00TOOL_RESULT\x00' 开头的状态行。
 
+        实现策略：全程使用 stream=True。
+        - 文本 delta → 直接 yield（真正流式输出）
+        - tool_call delta → 按 index 积累，流结束后执行
+        """
         main_tools = [t for t in MAIN_TOOL_DEFINITIONS if t["function"]["name"] != "use_skill"]
         _tools = [DELEGATE_TOOL_DEFINITION] + main_tools + [build_use_skill_definition()] + self._mcp.get_tool_definitions()
-
-        def _create(client: OpenAI, model: str, **kwargs):
-            return client.chat.completions.create(model=model, **kwargs)
-
-        while True:
-            # 先用非流式做工具调用处理，只在最终回复时流式输出
-            response = self._call_with_fallback(
-                _create,
-                max_tokens=4096,
-                messages=self._compose_messages(knowledge_context),
-                tools=_tools,
-                tool_choice="auto",
-            )
-
-            msg = response.choices[0].message
-            self.history.append(msg.model_dump(exclude_unset=False))
-
-            if not msg.tool_calls:
-                # 直接从非流式响应逐字符 yield，避免第二次 API 请求导致的
-                # token 浪费和结果不一致风险（第二次请求也可能返回工具调用）。
-                content = msg.content or ""
-                for char in content:
-                    yield char
-                return
-
-            # 有工具调用：通知调用方，执行工具
-            for tool_call in msg.tool_calls:
-                fn_name = tool_call.function.name
-                # 修复：json.loads 加异常处理，避免 LLM 返回格式错误时崩溃
-                try:
-                    fn_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    _log.warning("工具 %s 参数解析失败，跳过: %s", fn_name, tool_call.function.arguments)
-                    fn_args = {}
-                yield f"\x00TOOL\x00{fn_name}:{json.dumps(fn_args, ensure_ascii=False)}"
-
-                result_str = self._execute_tool(fn_name, fn_args)
-                try:
-                    result_data = json.loads(result_str)
-                except json.JSONDecodeError:
-                    result_data = {}
-                status = "✓" if result_data.get("success") else "✗"
-                detail = result_data.get("result") or result_data.get("error") or ""
-                yield f"\x00TOOL_RESULT\x00{status} {detail}"
-
-                self.history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result_str,
-                })
+        run_context = OmAgentContext(task=user_message, metadata={})
+        yield from self._build_chat_stream_workflow(_tools).stream(run_context)
+        if run_context.error:
+            raise RuntimeError(run_context.error or "Main Agent streaming workflow 执行失败")
