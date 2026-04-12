@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Ansys Maxwell 电机电磁仿真对话助手"
 requires-python = ">=3.10"
 dependencies = [
-    "ansys-aedt-core>=0.13.0",
+    "pyaedt>=0.9.0",
     "openai>=1.30.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",

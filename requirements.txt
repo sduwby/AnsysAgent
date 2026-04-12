@@ -1,40 +1,40 @@
-# Ansys PyAEDT - Electronics Desktop Python 接口（Maxwell/Icepak/Circuit/RMXprt）
-ansys-aedt-core>=0.13.0
+# Ansys PyAEDT - Electronics Desktop Python interface
+pyaedt>=0.9.0
 
-# Ansys PyFluent - Fluent CFD Python 接口
+# Ansys PyFluent - Fluent CFD Python interface
 ansys-fluent-core>=0.20.0
 
-# Ansys PyMotorCAD - Motor-CAD 解析法电机初设计（EM/热/NVH）
+# Ansys PyMotorCAD - Motor-CAD motor design (EM/thermal/NVH)
 ansys-motorcad-core>=0.7.0
 
-# Ansys PyMAPDL - MAPDL 结构强度、热应力、NVH 谐响应分析
+# Ansys PyMAPDL - MAPDL structural, thermal stress, NVH harmonic analysis
 ansys-mapdl-core>=0.68.0
 
-# Ansys PyDPF-Post - 仿真结果后处理（应力/温度/位移场提取）
+# Ansys PyDPF-Post - Simulation post-processing
 ansys-dpf-post>=0.7.0
 
-# Ansys PyDynamicReporting - 自动化报告生成（HTML/PDF）
+# Ansys PyDynamicReporting - Automated report generation (HTML/PDF)
 ansys-dynamicreporting-core>=0.8.0
 
-# LLM 客户端（使用 OpenAI 兼容接口，对接 DeepSeek/Qwen/GLM/MiniMax 等）
+# LLM client (OpenAI compatible interface)
 openai>=1.30.0
 
-# Token 计数（精确计算 OpenAI 兼容模型的 token 数，用于上下文压缩触发判断）
+# Token counting for context compression
 tiktoken>=0.7.0
 
-# CLI 框架
+# CLI framework
 click>=8.1.0
 
-# 工具库
+# Utility libraries
 python-dotenv>=1.0.0
-rich>=13.0.0          # 终端格式化输出
-prompt_toolkit>=3.0.0  # 命令行输入增强（/命令自动补全）
+rich>=13.0.0          # Terminal formatting
+prompt_toolkit>=3.0.0  # Command line input enhancement
 
-# PDF 文本提取（RAG 知识索引可选依赖）
+# PDF text extraction (RAG knowledge indexing optional dependency)
 pypdf>=4.2.0
 
-# MCP (Model Context Protocol) 客户端 SDK
+# MCP (Model Context Protocol) client SDK
 mcp>=1.0.0
 
-# 默认内置 MCP server：DuckDuckGo web search（免费，无需 API Key）
+# Default built-in MCP server: DuckDuckGo web search (free, no API Key required)
 duckduckgo-mcp-server>=0.1.0
