@@ -20,17 +20,22 @@ def _app():
 # 工具：connect_icepak - 连接 Icepak
 # ---------------------------------------------------------------------------
 
-def connect_icepak(version: str = "2024.1", non_graphical: bool = False) -> dict:
-    """连接到 AEDT Icepak 实例。"""
+def connect_icepak(version: str | None = None, non_graphical: bool = False) -> dict:
+    """连接到 AEDT Icepak 实例。
+
+    Args:
+        version: AEDT 版本号，如 "2024.1"、"2025.1"；不传则自动检测当前运行版本
+        non_graphical: 是否以无界面批处理模式运行
+    """
     global _icepak_app
     try:
         from ansys.aedt.core import Icepak
-        _icepak_app = Icepak(
-            specified_version=version,
-            non_graphical=non_graphical,
-            new_desktop=False,
-        )
-        return _ok(ok_message(f"已连接到 Icepak {version}", version=version))
+        kwargs = {"non_graphical": non_graphical, "new_desktop": False}
+        if version is not None:
+            kwargs["version"] = version
+        _icepak_app = Icepak(**kwargs)
+        version_desc = version if version else "（自动检测）"
+        return _ok(ok_message(f"已连接到 Icepak {version_desc}", version=version))
     except Exception as e:
         return _err(str(e))
 

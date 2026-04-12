@@ -20,17 +20,22 @@ def _app():
 # 工具：connect_circuit - 连接 Maxwell Circuit
 # ---------------------------------------------------------------------------
 
-def connect_circuit(version: str = "2024.1", non_graphical: bool = False) -> dict:
-    """连接到 AEDT Maxwell Circuit Editor 实例。"""
+def connect_circuit(version: str | None = None, non_graphical: bool = False) -> dict:
+    """连接到 AEDT Maxwell Circuit Editor 实例。
+
+    Args:
+        version: AEDT 版本号，如 "2024.1"、"2025.1"；不传则自动检测当前运行版本
+        non_graphical: 是否以无界面批处理模式运行
+    """
     global _circuit_app
     try:
         from ansys.aedt.core import Circuit
-        _circuit_app = Circuit(
-            specified_version=version,
-            non_graphical=non_graphical,
-            new_desktop=False,
-        )
-        return _ok(ok_message(f"已连接到 Maxwell Circuit {version}", version=version))
+        kwargs = {"non_graphical": non_graphical, "new_desktop": False}
+        if version is not None:
+            kwargs["version"] = version
+        _circuit_app = Circuit(**kwargs)
+        version_desc = version if version else "（自动检测）"
+        return _ok(ok_message(f"已连接到 Maxwell Circuit {version_desc}", version=version))
     except Exception as e:
         return _err(str(e))
 
@@ -55,37 +60,47 @@ def create_inverter_circuit(
     try:
         app = _app()
         schematic = app.modeler
+        components = app.modeler.schematic  # NexximComponents instance
         warnings: list[str] = []
         wire_count = 0
 
-        # 放置直流电压源
-        schematic.schematic.add_component(
-            "V_DC",
-            value=f"{dc_voltage_V}V",
-            location=[0, 0],
-        )
+        # 放置直流电压源（PyAEDT 0.25.x: create_voltage_dc）
+        try:
+            components.create_voltage_dc(
+                name="V_DC",
+                value=dc_voltage_V,
+                location=[0, 0],
+            )
+        except Exception as e:
+            warnings.append(f"V_DC 创建失败: {e}")
 
-        # 放置六个 IGBT 开关并实际设置开关频率和死区时间属性
+        # 放置六个 IGBT 开关（使用 create_component，从 Switches 库取 IGBT）
         positions = {"A": [2, 2], "B": [4, 2], "C": [6, 2]}
         for phase, pos in positions.items():
             for side, y_off in [("High", 0), ("Low", -2)]:
                 name = f"S_{side}_{phase}"
-                comp = schematic.schematic.add_component(
-                    name, "SwitchIGBT", location=[pos[0], pos[1] + y_off]
-                )
-                # 将开关频率与死区时间写入组件属性
                 try:
-                    comp.parameters["SwitchingFrequency"] = f"{switching_freq_Hz}Hz"
-                    comp.parameters["DeadTime"] = f"{dead_time_us}us"
+                    comp = components.create_component(
+                        name=name,
+                        component_library="Switches",
+                        component_name="IGBT",
+                        location=[pos[0], pos[1] + y_off],
+                    )
+                    # 将开关频率与死区时间写入组件属性
+                    try:
+                        comp.parameters["SwitchingFrequency"] = f"{switching_freq_Hz}Hz"
+                        comp.parameters["DeadTime"] = f"{dead_time_us}us"
+                    except Exception as e:
+                        warnings.append(f"{name} 参数写入失败: {e}")
                 except Exception as e:
-                    warnings.append(f"{name} 参数写入失败: {e}")
+                    warnings.append(f"{name} 创建失败: {e}")
 
         # 连接直流正母线：V_DC 正极 → 各上管漏极
         bus_y_pos = 3
         bus_y_neg = -1
         for pos in positions.values():
             try:
-                schematic.schematic.create_wire(
+                components.create_wire(
                     [[0, bus_y_pos], [pos[0], bus_y_pos], [pos[0], pos[1]]]
                 )
                 wire_count += 1
@@ -94,7 +109,7 @@ def create_inverter_circuit(
         # 连接直流负母线：各下管源极 → V_DC 负极
         for pos in positions.values():
             try:
-                schematic.schematic.create_wire(
+                components.create_wire(
                     [[pos[0], pos[1] - 2], [pos[0], bus_y_neg], [0, bus_y_neg]]
                 )
                 wire_count += 1
@@ -132,13 +147,20 @@ def link_maxwell_to_circuit(maxwell_design_name: str) -> dict:
     """
     try:
         app = _app()
-        # 创建动态链接到 Maxwell 设计的电机模型
-        coupled_component = app.modeler.schematic.add_component(
-            "MotorModel",
-            component_library="Maxwell",
-            component_name=maxwell_design_name,
-            location=[8, 2],
-        )
+        # 创建动态链接到 Maxwell 设计的电机模型（PyAEDT 0.25.x: add_subcircuit_dynamic_link）
+        try:
+            coupled_component = app.modeler.schematic.add_subcircuit_dynamic_link(
+                maxwell_design_name,
+                location=[8, 2],
+            )
+        except Exception:
+            # fallback: create_component with Maxwell library
+            coupled_component = app.modeler.schematic.create_component(
+                name="MotorModel",
+                component_library="Maxwell",
+                component_name=maxwell_design_name,
+                location=[8, 2],
+            )
         return _ok(ok_message(
             f"已将 Maxwell 设计 '{maxwell_design_name}' 链接到 Circuit",
             maxwell_design_name=maxwell_design_name,

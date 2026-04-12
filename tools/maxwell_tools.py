@@ -155,7 +155,7 @@ def _radial_point_expr(radius_expr: str, angle_deg: float) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def connect_aedt(
-    version: str = "2024.1",
+    version: str | None = None,
     is_3d: bool = False,
     non_graphical: bool = False,
     project_path: str = "",
@@ -165,7 +165,7 @@ def connect_aedt(
     连接到运行中的 AEDT 实例或启动新实例。
 
     Args:
-        version: AEDT 版本号，如 "2024.1"
+        version: AEDT 版本号，如 "2024.1"、"2025.1"；不传则自动检测当前运行版本
         is_3d: True 使用 Maxwell 3D，False 使用 Maxwell 2D
         non_graphical: 是否无界面运行（批处理模式）
         project_path: 目标项目路径或项目名；留空则连接当前活动项目
@@ -174,10 +174,11 @@ def connect_aedt(
     global _aedt_app
     try:
         kwargs = {
-            "specified_version": version,
             "non_graphical": non_graphical,
             "new_desktop": False,
         }
+        if version is not None:
+            kwargs["version"] = version
         if project_path:
             kwargs["project"] = project_path
         if design_name:
@@ -194,8 +195,9 @@ def connect_aedt(
         if design_name:
             target.append(f"设计={design_name}")
         target_desc = f"，{', '.join(target)}" if target else ""
+        version_desc = version if version else "（自动检测）"
         return _ok(ok_message(
-            f"已连接到 AEDT {version}（{'Maxwell 3D' if is_3d else 'Maxwell 2D'}{target_desc}）",
+            f"已连接到 AEDT {version_desc}（{'Maxwell 3D' if is_3d else 'Maxwell 2D'}{target_desc}）",
             version=version,
             is_3d=is_3d,
             project_path=project_path or None,
@@ -230,7 +232,7 @@ def create_maxwell_project(project_name: str, design_name: str = "Motor") -> dic
             if active_design is not None:
                 active_design.name = design_name
         elif hasattr(app, "insert_design"):
-            app.insert_design(design_name=design_name)
+            app.insert_design(name=design_name)
         elif hasattr(app, "new_design"):
             app.new_design(design_name=design_name)
         else:
@@ -264,12 +266,41 @@ def create_motor_geometry(
     """
     在 Maxwell 2D 中建立表贴式 PMSM 简化几何模型。
     所有尺寸单位为 mm，使用 PyAEDT 图元接口。
+
+    ⚠️ 参数说明（重要，避免几何错误）：
+        rotor_outer_radius: 转子铁芯外半径（不含磁铁）。
+            表贴式永磁体贴在转子铁芯外表面，磁铁外径 = rotor_outer_radius + magnet_thickness。
+            因此必须保证：rotor_outer_radius + magnet_thickness < stator_inner_radius（留有气隙）。
+
+    典型设计关系（以外径 150mm 电机为例）：
+        stator_outer_radius  = 75mm    (定子外径 150mm)
+        stator_inner_radius  = 45mm    (定子内径 90mm，定子槽深约 30mm)
+        magnet_thickness     = 4mm     (磁铁厚度)
+        [气隙]               ≈ 1mm     (stator_inner_radius - rotor_outer_radius - magnet_thickness)
+        rotor_outer_radius   = 40mm    (= stator_inner_radius - magnet_thickness - airgap)
+        rotor_inner_radius   = 15mm    (轴径 30mm)
+
+    Args:
+        stator_outer_radius: 定子铁芯外半径（mm）
+        stator_inner_radius: 定子铁芯内半径（mm，即定子槽底到轴心距离）
+        rotor_outer_radius:  转子铁芯外半径（mm，不含磁铁，磁铁贴在此面外侧）
+        rotor_inner_radius:  转子铁芯内半径（mm，即轴孔半径）
+        num_slots:           定子槽数
+        num_poles:           磁极数（必须为偶数）
+        magnet_thickness:    表贴永磁体厚度（mm，必须 < stator_inner_radius - rotor_outer_radius）
+        stack_length:        铁芯轴向叠压长度（mm），默认 50mm
     """
     # 前置几何合法性校验
     if stator_inner_radius >= stator_outer_radius:
         return _err("定子内径必须小于外径")
     if rotor_outer_radius >= stator_inner_radius:
-        return _err("转子外径必须小于定子内径（气隙不存在）")
+        return _err(
+            f"转子铁芯外径（rotor_outer_radius={rotor_outer_radius}mm）必须小于定子内径"
+            f"（stator_inner_radius={stator_inner_radius}mm），才能形成气隙+磁铁空间。"
+            f"请注意：rotor_outer_radius 是转子铁芯外半径（不含磁铁），"
+            f"磁铁贴在其外表面，需留出气隙。"
+            f"建议：rotor_outer_radius ≈ stator_inner_radius - magnet_thickness - 气隙(≥0.5mm)"
+        )
     if rotor_inner_radius >= rotor_outer_radius:
         return _err("转子内径必须小于外径")
     if num_slots <= 0 or num_poles <= 0:
@@ -278,8 +309,17 @@ def create_motor_geometry(
         return _err("PMSM 极数必须为偶数")
     if magnet_thickness <= 0:
         return _err("永磁体厚度必须为正值")
-    if magnet_thickness >= (stator_inner_radius - rotor_outer_radius):
-        return _err("永磁体厚度不能超过气隙宽度")
+    available_space = stator_inner_radius - rotor_outer_radius
+    if magnet_thickness >= available_space:
+        return _err(
+            f"永磁体厚度（magnet_thickness={magnet_thickness}mm）必须小于"
+            f"定子内径与转子铁芯外径之差（{available_space:.2f}mm）。"
+            f"当前参数：stator_inner_radius={stator_inner_radius}mm，"
+            f"rotor_outer_radius={rotor_outer_radius}mm，"
+            f"可用空间（气隙+磁铁）= {available_space:.2f}mm。"
+            f"请减小 magnet_thickness 或减小 rotor_outer_radius（转子铁芯外径）以留出足够空间。"
+            f"注意：rotor_outer_radius 是铁芯外径，不是包含磁铁的总转子外径。"
+        )
     try:
         app = _app()
         modeler = app.modeler
@@ -301,69 +341,53 @@ def create_motor_geometry(
                 "连续几何尺寸已绑定为 Maxwell 设计变量；num_slots/num_poles 仍属于拓扑参数，修改后需重建几何"
             )
 
-        # 定子轭部（环形）
+        # 定子轭部（环形）：subtract 后 PyAEDT 保留 blank 对象原名，直接用 "Stator" 命名
         modeler.create_circle(
-            position=[0, 0, 0],
+            origin=[0, 0, 0],
             radius=geometry_variables.get("stator_outer_radius", stator_outer_radius),
             num_sides=0,
-            name="Stator_Outer",
+            name="Stator",
             material="M250-35A",
         )
         modeler.create_circle(
-            position=[0, 0, 0],
+            origin=[0, 0, 0],
             radius=geometry_variables.get("stator_inner_radius", stator_inner_radius),
             num_sides=0,
             name="Stator_Inner_Cut",
         )
-        modeler.subtract("Stator_Outer", "Stator_Inner_Cut", keep_originals=False)
-        # subtract 后刷新对象缓存，确保跨 PyAEDT 版本均能通过原名找到对象
-        modeler.refresh_all_ids()
-        stator_obj = modeler.get_object_from_name("Stator_Outer")
-        if stator_obj is None:
-            raise RuntimeError("subtract 后未找到 Stator_Outer，请检查 PyAEDT 版本兼容性")
-        stator_obj.name = "Stator"
+        modeler.subtract("Stator", "Stator_Inner_Cut", keep_originals=False)
 
         # 转子轭部（环形）
         modeler.create_circle(
-            position=[0, 0, 0],
+            origin=[0, 0, 0],
             radius=geometry_variables.get("rotor_outer_radius", rotor_outer_radius),
             num_sides=0,
-            name="Rotor_Outer",
+            name="Rotor",
             material="M250-35A",
         )
         modeler.create_circle(
-            position=[0, 0, 0],
+            origin=[0, 0, 0],
             radius=geometry_variables.get("rotor_inner_radius", rotor_inner_radius),
             num_sides=0,
             name="Rotor_Inner_Cut",
         )
-        modeler.subtract("Rotor_Outer", "Rotor_Inner_Cut", keep_originals=False)
-        modeler.refresh_all_ids()
-        rotor_obj = modeler.get_object_from_name("Rotor_Outer")
-        if rotor_obj is None:
-            raise RuntimeError("subtract 后未找到 Rotor_Outer，请检查 PyAEDT 版本兼容性")
-        rotor_obj.name = "Rotor"
+        modeler.subtract("Rotor", "Rotor_Inner_Cut", keep_originals=False)
 
         # 气隙区域
         modeler.create_circle(
-            position=[0, 0, 0],
+            origin=[0, 0, 0],
             radius=geometry_variables.get("stator_inner_radius", stator_inner_radius),
             num_sides=0,
-            name="AirGap_Outer",
+            name="AirGap",
             material="vacuum",
         )
         modeler.create_circle(
-            position=[0, 0, 0],
+            origin=[0, 0, 0],
             radius=geometry_variables.get("rotor_outer_radius", rotor_outer_radius),
             num_sides=0,
             name="AirGap_Inner_Cut",
         )
-        modeler.subtract("AirGap_Outer", "AirGap_Inner_Cut", keep_originals=False)
-        modeler.refresh_all_ids()
-        airgap_obj = modeler.get_object_from_name("AirGap_Outer")
-        if airgap_obj is None:
-            raise RuntimeError("subtract 后未找到 AirGap_Outer，请检查 PyAEDT 版本兼容性")
-        airgap_obj.name = "AirGap"
+        modeler.subtract("AirGap", "AirGap_Inner_Cut", keep_originals=False)
 
         # 表贴式永磁体：每极一块扇形面（外弧 + 内弧封闭多边形），磁极弧系数 0.85
         # 使用 create_polyline + cover_surface=True 生成 2D 面对象（而非 1D 弧线），
@@ -376,7 +400,7 @@ def create_motor_geometry(
             if geometry_variables
             else str(rotor_outer_radius + magnet_thickness)
         )
-        num_arc_pts = 16  # 每段弧的离散点数，越多弧形越精确
+        num_arc_pts = 4  # 每段弧的离散点数；4点已足够 Maxwell 2D 识别弧形，过多点会极大拖慢 AEDT 响应
 
         for i in range(num_poles):
             start_angle = i * pole_angle - magnet_arc / 2
@@ -397,10 +421,10 @@ def create_motor_geometry(
             polygon = outer_pts + inner_pts  # 外弧 + 内弧构成封闭扇形边界
 
             modeler.create_polyline(
-                position_list=polygon,
+                points=polygon,
                 cover_surface=True,  # 将封闭折线覆盖为 2D 面对象
                 name=obj_name,
-                matname="NdFe35",
+                material="NdFe35",
             )
             if not _apply_magnetization(app, obj_name, magnetization_angle):
                 warnings.append(f"未能自动设置 {obj_name} 的磁化方向（目标角度 {magnetization_angle:.1f}deg）")
@@ -434,10 +458,10 @@ def create_motor_geometry(
             cond_polygon = cond_outer_pts + cond_inner_pts
 
             modeler.create_polyline(
-                position_list=cond_polygon,
+                points=cond_polygon,
                 cover_surface=True,
                 name=cond_name,
-                matname="copper",
+                material="copper",
             )
             # 从定子铁心挖去导体区域，keep_originals=True 保留导体对象
             modeler.subtract("Stator", cond_name, keep_originals=True)
