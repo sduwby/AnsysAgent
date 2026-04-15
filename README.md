@@ -19,6 +19,7 @@
 - **模块化工具**：92+ 内置工具覆盖电机仿真全流程，并支持通过 MCP 动态扩展额外工具
 - **本地知识增强（RAG）**：自动索引内置文档和用户扩展知识目录，支持 PDF / PPTX / Notebook / Python / Markdown 等格式
 - **技能与角色**：支持 `/roles` 管理自定义系统角色，并支持 `skills/` 目录下的专业流程技能
+- **持久记忆（Memory）**：支持保存用户偏好、项目背景、外部参考入口等非代码型长期上下文
 - **统一数据目录**：配置、日志、角色、技能、知识索引、MCP 配置统一写入 `ANSYS_DATA_DIR`
 
 ## 完整仿真流水线
@@ -121,6 +122,7 @@ ansys-agent --version
 - `/config`：配置 LLM 提供商、API Key 和模型
 - `/roles`：管理用户自定义角色（最多 5 个，每个最多 200 行）
 - `/skills`：管理技能（查看内置/用户技能，添加、删除用户自定义技能）
+- `/memory`：查看持久记忆索引和已保存条目
 - `/mcp`：管理 MCP Server（查看已注册工具、添加/删除 server 配置）
 - `/exit` / `/quit`：退出程序
 
@@ -146,6 +148,9 @@ http://localhost:7788
 ```text
 ~/.AnsysAgent/
 ├── .env
+├── memory/
+│   ├── MEMORY.md
+│   └── *.md
 ├── .rag/
 │   └── keyword_index.json
 ├── knowledge/

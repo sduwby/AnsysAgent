@@ -26,6 +26,7 @@ from tools import (
     dynamic_reporting_tools,
     knowledge_tools,
     skill_tools,
+    memory_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -163,6 +164,11 @@ TOOL_REGISTRY: dict[str, callable] = {
     "search_official_docs": knowledge_tools.search_official_docs,
     # 技能加载工具
     "use_skill": skill_tools.use_skill,
+    # 持久记忆工具
+    "list_memories": memory_tools.list_memories,
+    "read_memory": memory_tools.read_memory,
+    "save_memory": memory_tools.save_memory,
+    "delete_memory": memory_tools.delete_memory,
 }
 
 # ---------------------------------------------------------------------------
@@ -211,6 +217,71 @@ TOOL_DEFINITIONS = [
                     "skill_name": {"type": "string", "description": "要加载的技能名称"},
                 },
                 "required": ["skill_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_memories",
+            "description": "列出持久记忆；若提供 query，则优先返回与当前问题最相关的 memory。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "当前问题或上下文，用于筛选相关记忆"},
+                    "top_k": {"type": "integer", "description": "返回数量，默认 10"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_memory",
+            "description": "读取某条持久记忆的完整内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "memory 名称"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "保存或更新一条持久记忆，并自动更新 MEMORY.md 入口索引。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "memory 名称"},
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["user", "feedback", "project", "reference"],
+                        "description": "memory 类型",
+                    },
+                    "description": {"type": "string", "description": "一行摘要，用于 MEMORY.md 和相关性检索"},
+                    "content": {"type": "string", "description": "memory 正文内容"},
+                    "update_index": {"type": "boolean", "description": "是否同步更新 MEMORY.md，默认 true"},
+                },
+                "required": ["name", "memory_type", "description", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "删除一条持久记忆，并可同步移除 MEMORY.md 中的入口索引。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "memory 名称"},
+                    "remove_from_index": {"type": "boolean", "description": "是否同步移除 MEMORY.md 索引，默认 true"},
+                },
+                "required": ["name"],
             },
         },
     },
@@ -2062,6 +2133,7 @@ _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
     "save_project", "open_project", "close_project", "list_designs", "copy_design",
     "build_knowledge_index", "search_official_docs",
+    "list_memories", "read_memory", "save_memory", "delete_memory",
     "use_skill",
 })
 

@@ -11,6 +11,7 @@ AnsysAgent 统一数据目录。
 目录结构：
   {ANSYS_DATA_DIR}/
     .env                  ← LLM 配置（API Key、模型等）
+    memory/               ← 持久记忆目录（MEMORY.md + 独立 memory 文件）
     .rag/                 ← RAG 关键词索引
     knowledge/            ← 用户扩展知识库（official / internal）
     logs/                 ← 运行日志

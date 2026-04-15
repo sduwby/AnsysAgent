@@ -73,8 +73,9 @@ openai_stub.APIStatusError = _DummyAPIStatusError
 sys.modules.setdefault("openai", openai_stub)
 
 from agent import chat_agent, config_manager, mcp_manager, tool_definitions
+from agent.memory_manager import MemoryManager, MEMORY_DIR, MEMORY_ENTRYPOINT
 from agent import omagent_runtime, sub_agent_base
-from tools import circuit_tools, coupling_tools, dynamic_reporting_tools, fluent_tools, icepak_tools, knowledge_tools, mapdl_tools, maxwell_tools, mechanical_tools, motorcad_tools, project_tools, report_tools, rmxprt_tools, sweep_tools
+from tools import circuit_tools, coupling_tools, dynamic_reporting_tools, fluent_tools, icepak_tools, knowledge_tools, mapdl_tools, maxwell_tools, mechanical_tools, memory_tools, motorcad_tools, project_tools, report_tools, rmxprt_tools, sweep_tools
 from tools import result_tools, utils as tool_utils, visualization_tools
 from rag import ingest as rag_ingest
 
@@ -368,6 +369,13 @@ class DummyMaxwellModeler:
 
 
 class RegressionTests(unittest.TestCase):
+    def setUp(self):
+        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        for path in MEMORY_DIR.glob("*.md"):
+            path.unlink()
+        if MEMORY_ENTRYPOINT.exists():
+            MEMORY_ENTRYPOINT.unlink()
+
     def test_normalize_mcp_config_upgrades_legacy_duckduckgo_command(self):
         config = {
             "duckduckgo": {
@@ -401,6 +409,48 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(cfg.provider, "openrouter")
         self.assertEqual(cfg.base_url, "https://openrouter.ai/api/v1")
         self.assertEqual(cfg.model, "openai/gpt-oss-120b:free")
+
+    def test_memory_manager_save_and_find_relevant(self):
+        manager = MemoryManager()
+        ok, _ = manager.save_memory(
+            name="user-style",
+            memory_type="feedback",
+            description="用户偏好简洁回复",
+            content="回答尽量简洁，避免冗长总结。",
+        )
+        self.assertTrue(ok)
+        entrypoint = MEMORY_ENTRYPOINT.read_text(encoding="utf-8")
+        self.assertIn("user-style.md", entrypoint)
+        relevant = manager.find_relevant_memories("请简洁一点回答", top_k=3)
+        self.assertGreaterEqual(len(relevant), 1)
+        self.assertEqual(relevant[0].name, "user-style")
+
+    def test_memory_tools_read_and_delete(self):
+        save_result = memory_tools.save_memory(
+            name="project-freeze",
+            memory_type="project",
+            description="项目在 2026-04-20 后冻结非关键改动",
+            content="2026-04-20 后仅允许修复阻塞发布的问题。",
+        )
+        self.assertTrue(save_result["success"])
+        read_result = memory_tools.read_memory("project-freeze")
+        self.assertTrue(read_result["success"])
+        self.assertIn("2026-04-20", read_result["result"]["content"])
+        delete_result = memory_tools.delete_memory("project-freeze")
+        self.assertTrue(delete_result["success"])
+
+    def test_memory_context_contains_guidance_and_relevant_memories(self):
+        manager = MemoryManager()
+        manager.save_memory(
+            name="reference-dashboard",
+            memory_type="reference",
+            description="性能延迟看板地址",
+            content="Grafana 延迟看板位于 grafana.internal/d/api-latency 。",
+        )
+        context = manager.build_memory_context("延迟看板在哪")
+        self.assertIn("持久记忆系统", context)
+        self.assertIn("MEMORY.md", context)
+        self.assertIn("reference-dashboard", context)
 
     def test_load_llm_config_uses_provider_specific_key(self):
         env = {

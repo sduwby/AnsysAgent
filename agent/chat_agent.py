@@ -17,6 +17,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get_provider_api_key
+from agent.memory_manager import MemoryManager
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
 from agent.logger import get_logger
@@ -148,6 +149,7 @@ class ChatAgent:
         self._init_client()
         self.history: list[dict] = []
         self._knowledge_index_ready = False
+        self._memory = MemoryManager()
         self._prepare_knowledge_index()
         self._init_sub_agents()
         # 初始化 MCP 管理器（优雅降级：若 mcp 包未安装则跳过）
@@ -228,8 +230,14 @@ class ChatAgent:
             lines.append(f"   摘要: {hit.get('snippet')}")
         return "\n".join(lines)
 
-    def _compose_messages(self, knowledge_context: str = "") -> list[dict]:
+    def _compose_messages(self, knowledge_context: str = "", user_message: str = "") -> list[dict]:
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        try:
+            memory_context = self._memory.build_memory_context(user_message)
+            if memory_context:
+                messages.append({"role": "system", "content": memory_context})
+        except Exception as e:
+            _log.warning("加载 memory 失败，跳过: %s", e)
         # 注入用户 roles（每次对话前动态加载，支持会话中 /roles 热修改后立即生效）
         try:
             roles_prompt = RoleManager().get_roles_prompt()
@@ -549,7 +557,7 @@ class ChatAgent:
         self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(run_context.task)
         run_context.knowledge_context = knowledge_context
-        run_context.messages = list(self._compose_messages(knowledge_context))
+        run_context.messages = list(self._compose_messages(knowledge_context, run_context.task))
         run_context.metadata["tools"] = tools
 
     def chat(self, user_message: str) -> str:

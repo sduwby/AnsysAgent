@@ -167,7 +167,7 @@ WELCOME = (
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  /help 查看帮助 | /config 配置 LLM | /roles 管理角色 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]\n"
+    "  /help 查看帮助 | /config 配置 LLM | /roles 管理规则 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]\n"
     f"[dim]📋 Log viewer: http://localhost:{{_log_port}}[/dim]"
 )
 
@@ -496,6 +496,27 @@ def run_mcp_wizard(console: Console, mcp_manager) -> None:
             console.print("[yellow]  无效选项[/yellow]")
 
 
+def run_memory_wizard(console: Console) -> None:
+    """展示 memory 索引和已保存条目。"""
+    from agent.memory_manager import MemoryManager, MEMORY_ENTRYPOINT
+
+    manager = MemoryManager()
+    memories = manager.list_memories()
+    if memories:
+        body = "\n".join(
+            f"  [cyan]{item.name}[/cyan] [{item.memory_type or 'unknown'}] - {item.description}"
+            for item in memories[:20]
+        )
+    else:
+        body = "  （暂无 memory）"
+
+    console.print(Panel(
+        body,
+        title=f"Memory 列表（索引文件: {MEMORY_ENTRYPOINT}）",
+        border_style="cyan",
+    ))
+
+
 # ---------------------------------------------------------------------------
 # 帮助
 # ---------------------------------------------------------------------------
@@ -564,10 +585,21 @@ def _show_help(console: Console) -> None:
         padding=(0, 2),
     ))
 
+    console.print(Panel(
+        "  持久保存用户偏好、项目约束、外部参考入口等长期上下文\n"
+        f"  存储目录：[dim]{data_dir}/memory/[/dim]\n"
+        f"  入口索引：[dim]{data_dir}/memory/MEMORY.md[/dim]\n"
+        "  AI 可通过 memory 工具自动读写，也可用 [bold]/memory[/bold] 查看当前条目",
+        title="[bold cyan]/memory[/bold cyan]     — 持久记忆",
+        border_style="cyan",
+        padding=(0, 2),
+    ))
+
     # ── 其他命令 ──────────────────────────────────────────────────────────
     console.print(Panel(
         "  [dim]/clear  /new[/dim]   → 清空对话历史，开始新对话\n"
         "  [dim]/purge  /clean[/dim] → [red]删除所有本地数据[/red]（配置/索引/日志/角色/技能），不可撤销\n"
+        "  [dim]/memory[/dim]         → 查看 memory 索引和已保存条目\n"
         "  [dim]/mcp[/dim]            → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
         "  [dim]/exit  /quit[/dim]   → 退出程序（也可按 Ctrl+C）\n"
         "  [dim]/coffee[/dim]        → ☕ 彩蛋\n"
@@ -682,6 +714,16 @@ def _handle_skills(ctx: CommandContext) -> str:
     except Exception as e:
         _log.error("Skills 管理异常: %s", e, exc_info=True)
         ctx.console.print(f"[red]Skills 操作失败: {e}[/red]")
+    return DispatchResult.HANDLED
+
+
+def _handle_memory(ctx: CommandContext) -> str:
+    try:
+        run_memory_wizard(ctx.console)
+        _log.info("用户查看 memory 列表")
+    except Exception as e:
+        _log.error("Memory 查看异常: %s", e, exc_info=True)
+        ctx.console.print(f"[red]Memory 操作失败: {e}[/red]")
     return DispatchResult.HANDLED
 
 
@@ -840,6 +882,7 @@ def _register_commands(agent) -> None:
     r.register("/config",  "配置 LLM 提供商和 API Key",        _make_config_handler(agent))
     r.register("/roles",   "管理 AI 角色（添加/修改/删除）",   _handle_roles)
     r.register("/skills",  "管理专业流程技能",                  _handle_skills)
+    r.register("/memory",  "查看持久记忆条目",                  _handle_memory)
     r.register("/mcp",     "管理 MCP server",                  _make_mcp_handler(agent))
     r.register("/clear",   "清空对话历史，开始新对话",           _make_clear_handler(agent),
                aliases=["/new"])
