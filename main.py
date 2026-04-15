@@ -10,11 +10,8 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.text import Text
 
 try:
     from prompt_toolkit import PromptSession
@@ -29,6 +26,7 @@ from agent.commands import command_registry, CommandContext, DispatchResult
 from agent.config_manager import run_config_wizard, set_thinking_enabled, model_supports_thinking
 from agent.logger import setup_logging, get_logger
 from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
+from agent.terminal_renderer import AssistantStreamRenderer
 
 
 def _find_env_path() -> Path:
@@ -618,9 +616,13 @@ def _stream_response(agent, user_input: str) -> str:
     in_text = False
     assistant_prefix_printed = False
     in_thinking = False
+    text_renderer: AssistantStreamRenderer | None = None
 
     for chunk in agent.chat_stream(user_input):
         if chunk == "\x00THINKING_START\x00":
+            if text_renderer is not None:
+                text_renderer.finalize()
+                text_renderer = None
             if not assistant_prefix_printed:
                 console.print(ASSISTANT_PROMPT_RICH, end="")
                 assistant_prefix_printed = True
@@ -635,6 +637,9 @@ def _stream_response(agent, user_input: str) -> str:
                 console.print()
                 in_thinking = False
         elif chunk.startswith("\x00THINKING\x00"):
+            if text_renderer is not None:
+                text_renderer.finalize()
+                text_renderer = None
             if not in_thinking:
                 if not assistant_prefix_printed:
                     console.print(ASSISTANT_PROMPT_RICH, end="")
@@ -645,6 +650,9 @@ def _stream_response(agent, user_input: str) -> str:
             console.print(chunk[len("\x00THINKING\x00"):], end="", highlight=False, markup=False, style="magenta")
         elif chunk.startswith("\x00TOOL\x00"):
             # 工具调用通知
+            if text_renderer is not None:
+                text_renderer.finalize()
+                text_renderer = None
             if not assistant_prefix_printed:
                 console.print(ASSISTANT_PROMPT_RICH, end="")
                 assistant_prefix_printed = True
@@ -656,6 +664,9 @@ def _stream_response(agent, user_input: str) -> str:
             console.print(f"[dim]🔧 调用工具: [bold]{payload.split(':', 1)[0]}[/bold][/dim]")
         elif chunk.startswith("\x00TOOL_RESULT\x00"):
             # 工具执行结果
+            if text_renderer is not None:
+                text_renderer.finalize()
+                text_renderer = None
             if not assistant_prefix_printed:
                 console.print(ASSISTANT_PROMPT_RICH, end="")
                 assistant_prefix_printed = True
@@ -667,8 +678,9 @@ def _stream_response(agent, user_input: str) -> str:
             color = "green" if result.startswith("✓") else "red"
             console.print(f"[{color}]  {result}[/{color}]")
         else:
-            # 正常文本 token，累积后流式输出
+            # 正常文本 token，交给专用 assistant renderer 处理。
             text_buf += chunk
+
             if not in_text:
                 in_text = True
                 if in_thinking:
@@ -680,9 +692,12 @@ def _stream_response(agent, user_input: str) -> str:
                 elif text_buf == chunk:
                     console.print()
 
-            # 直接打印每个 token（不等待整段完成）
-            console.print(chunk, end="", highlight=False, markup=False)
+            if text_renderer is None:
+                text_renderer = AssistantStreamRenderer(console)
+            text_renderer.append_text(chunk)
 
+    if text_renderer is not None:
+        text_renderer.finalize()
     if in_thinking:
         console.print()
     if in_text or assistant_prefix_printed:

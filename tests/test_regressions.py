@@ -7,30 +7,89 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+click_stub = types.ModuleType("click")
+click_stub.command = lambda *args, **kwargs: (lambda func: func)
+click_stub.option = lambda *args, **kwargs: (lambda func: func)
+click_stub.argument = lambda *args, **kwargs: (lambda func: func)
+click_stub.version_option = lambda *args, **kwargs: (lambda func: func)
+click_stub.echo = lambda *args, **kwargs: None
+sys.modules.setdefault("click", click_stub)
+
 dotenv_stub = types.ModuleType("dotenv")
 dotenv_stub.set_key = lambda *args, **kwargs: None
+dotenv_stub.load_dotenv = lambda *args, **kwargs: None
 sys.modules.setdefault("dotenv", dotenv_stub)
 
 rich_stub = types.ModuleType("rich")
+rich_box_stub = types.ModuleType("rich.box")
 rich_console_stub = types.ModuleType("rich.console")
+rich_live_stub = types.ModuleType("rich.live")
 rich_markdown_stub = types.ModuleType("rich.markdown")
 rich_panel_stub = types.ModuleType("rich.panel")
 rich_prompt_stub = types.ModuleType("rich.prompt")
+rich_table_stub = types.ModuleType("rich.table")
+rich_text_stub = types.ModuleType("rich.text")
 
 
 class _DummyConsole:
+    def __init__(self):
+        self.print_calls = []
+
     def print(self, *args, **kwargs):
+        self.print_calls.append((args, kwargs))
         return None
+
+
+class _DummyGroup:
+    def __init__(self, *args, **kwargs):
+        self.args = args
 
 
 class _DummyPanel:
     def __init__(self, *args, **kwargs):
-        pass
+        self.args = args
+        self.kwargs = kwargs
 
 
 class _DummyMarkdown:
     def __init__(self, *args, **kwargs):
         pass
+
+
+class _DummyLive:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def start(self):
+        return None
+
+    def update(self, *args, **kwargs):
+        return None
+
+    def stop(self):
+        return None
+
+
+class _DummyTable:
+    def __init__(self, *args, **kwargs):
+        self.columns = []
+        self.rows = []
+
+    def add_column(self, *args, **kwargs):
+        self.columns.append((args, kwargs))
+
+    def add_row(self, *args, **kwargs):
+        self.rows.append((args, kwargs))
+
+
+class _DummyText:
+    def __init__(self, *args, **kwargs):
+        self.parts = []
+        if args:
+            self.parts.append((args[0], kwargs.get("style")))
+
+    def append(self, text, style=None):
+        self.parts.append((text, style))
 
 
 class _DummyPrompt:
@@ -39,15 +98,24 @@ class _DummyPrompt:
         return ""
 
 
+rich_box_stub.SIMPLE_HEAVY = object()
 rich_console_stub.Console = _DummyConsole
+rich_console_stub.Group = _DummyGroup
+rich_live_stub.Live = _DummyLive
 rich_markdown_stub.Markdown = _DummyMarkdown
 rich_panel_stub.Panel = _DummyPanel
 rich_prompt_stub.Prompt = _DummyPrompt
+rich_table_stub.Table = _DummyTable
+rich_text_stub.Text = _DummyText
 sys.modules.setdefault("rich", rich_stub)
+sys.modules.setdefault("rich.box", rich_box_stub)
 sys.modules.setdefault("rich.console", rich_console_stub)
+sys.modules.setdefault("rich.live", rich_live_stub)
 sys.modules.setdefault("rich.markdown", rich_markdown_stub)
 sys.modules.setdefault("rich.panel", rich_panel_stub)
 sys.modules.setdefault("rich.prompt", rich_prompt_stub)
+sys.modules.setdefault("rich.table", rich_table_stub)
+sys.modules.setdefault("rich.text", rich_text_stub)
 
 openai_stub = types.ModuleType("openai")
 
@@ -72,6 +140,7 @@ openai_stub.RateLimitError = _DummyRateLimitError
 openai_stub.APIStatusError = _DummyAPIStatusError
 sys.modules.setdefault("openai", openai_stub)
 
+import agent.terminal_renderer as terminal_renderer
 from agent import chat_agent, config_manager, mcp_manager, tool_definitions
 from agent.memory_manager import MemoryManager, MEMORY_DIR, MEMORY_ENTRYPOINT
 from agent import omagent_runtime, sub_agent_base
@@ -2595,6 +2664,163 @@ class RegressionTests(unittest.TestCase):
             )
         self.assertFalse(result["success"])
         self.assertIn("未知场量名称", result["error"])
+
+    def test_terminal_renderer_detects_and_splits_markdown_blocks(self):
+        self.assertFalse(terminal_renderer.has_markdown_signal("plain response"))
+        self.assertTrue(terminal_renderer.has_markdown_signal("| col | val |\n"))
+        self.assertTrue(terminal_renderer.has_markdown_signal("这是 **bold** 文本"))
+        self.assertFalse(terminal_renderer.has_markdown_opener("plain response"))
+        self.assertTrue(terminal_renderer.has_markdown_opener("这是 **bold"))
+        self.assertTrue(terminal_renderer.has_markdown_opener("`code"))
+
+        blocks = terminal_renderer.split_markdown_blocks(
+            "# Title\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nParagraph"
+        )
+        self.assertEqual(3, len(blocks))
+        self.assertEqual("# Title", blocks[0])
+        self.assertIn("| --- | --- |", blocks[1])
+        self.assertEqual("Paragraph", blocks[2])
+
+    def test_terminal_renderer_renders_markdown_table_as_table(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "| tool | desc |\n| --- | --- |\n| maxwell | em |\n"
+        )
+        self.assertIsInstance(renderable, _DummyTable)
+        self.assertEqual(2, len(renderable.columns))
+        self.assertEqual(1, len(renderable.rows))
+
+    def test_terminal_renderer_strips_inline_markdown_markers_in_table_cells(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "| tool | desc |\n| --- | --- |\n| **maxwell** | `em` |\n"
+        )
+        first_row = renderable.rows[0][0]
+        left_cell = first_row[0]
+        right_cell = first_row[1]
+        self.assertIsInstance(left_cell, _DummyText)
+        self.assertIsInstance(right_cell, _DummyText)
+        self.assertEqual([("maxwell", "bold")], left_cell.parts)
+        self.assertEqual([("em", "bold bright_black on grey15")], right_cell.parts)
+
+    def test_terminal_renderer_renders_json_fence_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```json\n{\"name\":\"maxwell\",\"enabled\":true}\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("json", renderable.kwargs["title"])
+
+    def test_terminal_renderer_renders_text_fence_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```txt\nline1\nline2\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("txt", renderable.kwargs["title"])
+
+    def test_terminal_renderer_renders_flowchart_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```mermaid\nflowchart TD\nA[Start] --> B{Check}\nB --> C[Done]\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("flowchart TD", renderable.kwargs["title"])
+        self.assertIsInstance(renderable.args[0], _DummyText)
+
+    def test_terminal_renderer_does_not_cache_table_or_fenced_blocks_while_streaming(self):
+        self.assertFalse(terminal_renderer._is_cacheable_block("| a | b |\n| --- | --- |\n| 1 | 2 |"))
+        self.assertFalse(terminal_renderer._is_cacheable_block("```json\n{}\n```"))
+        self.assertTrue(terminal_renderer._is_cacheable_block("普通段落"))
+
+    def test_terminal_renderer_flowchart_uses_standalone_node_labels(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```mermaid\nflowchart TD\nA[需求收集]\nB[几何建模]\nC[电磁仿真]\nA --> B\nB --> C\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        flow_text = renderable.args[0]
+        self.assertIsInstance(flow_text, _DummyText)
+        joined = "".join(part[0] for part in flow_text.parts)
+        self.assertIn("需求收集", joined)
+        self.assertIn("几何建模", joined)
+        self.assertIn("电磁仿真", joined)
+
+    def test_terminal_renderer_commits_stable_blocks_and_keeps_tail_live(self):
+        console = _DummyConsole()
+        renderer = terminal_renderer.AssistantStreamRenderer(console)
+        renderer.append_text("# Title\n\nParagraph")
+        renderer.append_text("\n\n| a | b |\n| --- | --- |\n| 1 | 2 |")
+
+        self.assertEqual(2, len(renderer._committed_blocks))
+        self.assertEqual("# Title", renderer._committed_blocks[0])
+        self.assertEqual("Paragraph", renderer._committed_blocks[1])
+        self.assertIsNotNone(renderer._live)
+        self.assertEqual([], console.print_calls)
+
+    def test_terminal_renderer_strips_inline_markdown_from_flow_labels(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```mermaid\nflowchart TD\nA[**需求收集**]\nB[`几何建模`]\nA --> B\n```"
+        )
+        flow_text = renderable.args[0]
+        joined = "".join(part[0] for part in flow_text.parts)
+        self.assertIn("需求收集", joined)
+        self.assertIn("几何建模", joined)
+        self.assertNotIn("**", joined)
+        self.assertNotIn("`", joined)
+
+    def test_terminal_renderer_defers_flowchart_rendering_during_streaming(self):
+        block = "```mermaid\nflowchart TD\nA[需求收集]\nA --> B\n```"
+        renderable = terminal_renderer._render_streaming_block(block)
+        self.assertIsInstance(renderable, _DummyText)
+        joined = "".join(part[0] for part in renderable.parts)
+        self.assertIn("flowchart TD", joined)
+        self.assertIn("A[需求收集]", joined)
+
+    def test_terminal_renderer_finally_renders_flowchart(self):
+        block = "```mermaid\nflowchart TD\nA[需求收集]\nA --> B\n```"
+        renderable = terminal_renderer.render_markdown_block(block)
+        self.assertIsInstance(renderable, _DummyPanel)
+
+    def test_terminal_renderer_renders_deferred_block_when_next_block_starts(self):
+        console = _DummyConsole()
+        renderer = terminal_renderer.AssistantStreamRenderer(console)
+        renderer.append_text("```mermaid\nflowchart TD\nA[需求收集]\nA --> B\n```")
+        self.assertEqual([], renderer._committed_blocks)
+        renderer.append_text("\n\n后续普通说明")
+        self.assertEqual(1, len(renderer._committed_blocks))
+        committed = renderer._render_cached_block(renderer._committed_blocks[0])
+        self.assertIsInstance(committed, _DummyPanel)
+
+    def test_terminal_renderer_finalize_does_not_reprint_live_content(self):
+        console = _DummyConsole()
+        renderer = terminal_renderer.AssistantStreamRenderer(console)
+        renderer.append_text("```mermaid\nflowchart TD\nA[需求收集]\nA --> B\n```")
+        renderer.append_text("\n\n后续普通说明")
+        renderer.finalize()
+        self.assertEqual([], console.print_calls)
+
+    def test_terminal_renderer_renders_bash_fence_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```bash\n$ ansys-agent\n# comment\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("bash", renderable.kwargs["title"])
+
+    def test_terminal_renderer_renders_yaml_fence_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```yaml\nprovider: openrouter\nmodel: gpt-oss\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("yaml", renderable.kwargs["title"])
+
+    def test_terminal_renderer_renders_csv_fence_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```csv\nname,value\nmaxwell,1\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("csv", renderable.kwargs["title"])
+
+    def test_terminal_renderer_renders_sql_fence_as_panel(self):
+        renderable = terminal_renderer.render_markdown_block(
+            "```sql\nselect * from models;\n```"
+        )
+        self.assertIsInstance(renderable, _DummyPanel)
+        self.assertEqual("sql", renderable.kwargs["title"])
 
 
 if __name__ == "__main__":
