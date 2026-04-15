@@ -72,7 +72,7 @@ openai_stub.RateLimitError = _DummyRateLimitError
 openai_stub.APIStatusError = _DummyAPIStatusError
 sys.modules.setdefault("openai", openai_stub)
 
-from agent import chat_agent, config_manager, tool_definitions
+from agent import chat_agent, config_manager, mcp_manager, tool_definitions
 from agent import omagent_runtime, sub_agent_base
 from tools import circuit_tools, coupling_tools, dynamic_reporting_tools, fluent_tools, icepak_tools, knowledge_tools, mapdl_tools, maxwell_tools, mechanical_tools, motorcad_tools, project_tools, report_tools, rmxprt_tools, sweep_tools
 from tools import result_tools, utils as tool_utils, visualization_tools
@@ -368,6 +368,40 @@ class DummyMaxwellModeler:
 
 
 class RegressionTests(unittest.TestCase):
+    def test_normalize_mcp_config_upgrades_legacy_duckduckgo_command(self):
+        config = {
+            "duckduckgo": {
+                "command": "python",
+                "args": ["-m", "duckduckgo_mcp_server"],
+                "env": {},
+                "enabled": True,
+            }
+        }
+        normalized, changed = mcp_manager._normalize_config(config)
+        self.assertTrue(changed)
+        self.assertEqual(normalized["duckduckgo"]["command"], "duckduckgo-mcp-server")
+        self.assertEqual(normalized["duckduckgo"]["args"], [])
+
+    def test_normalize_mcp_config_keeps_new_duckduckgo_command(self):
+        config = {
+            "duckduckgo": {
+                "command": "duckduckgo-mcp-server",
+                "args": [],
+                "env": {},
+                "enabled": True,
+            }
+        }
+        normalized, changed = mcp_manager._normalize_config(config)
+        self.assertFalse(changed)
+        self.assertEqual(normalized, config)
+
+    def test_load_llm_config_defaults_to_openrouter(self):
+        with patch.dict(os.environ, {}, clear=True):
+            cfg = config_manager.load_llm_config()
+        self.assertEqual(cfg.provider, "openrouter")
+        self.assertEqual(cfg.base_url, "https://openrouter.ai/api/v1")
+        self.assertEqual(cfg.model, "openai/gpt-oss-120b:free")
+
     def test_load_llm_config_uses_provider_specific_key(self):
         env = {
             "LLM_PROVIDER": "openai",
@@ -379,6 +413,18 @@ class RegressionTests(unittest.TestCase):
             cfg = config_manager.load_llm_config()
         self.assertEqual(cfg.provider, "openai")
         self.assertEqual(cfg.api_key, "provider-key")
+
+    def test_load_llm_config_uses_legacy_openrouter_key(self):
+        env = {
+            "LLM_PROVIDER": "openrouter",
+            "LLM_API_KEY": "",
+            "LLM_MODEL": "",
+            "OPENROUTER_API_KEY": "openrouter-legacy-key",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            cfg = config_manager.load_llm_config()
+        self.assertEqual(cfg.provider, "openrouter")
+        self.assertEqual(cfg.api_key, "openrouter-legacy-key")
 
     def test_load_llm_config_uses_builtin_gemini_key_when_env_missing(self):
         env = {

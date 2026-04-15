@@ -39,13 +39,37 @@ MCP_CONFIG_PATH: Path = ANSYS_DATA_DIR / "mcp_servers.json"
 # 默认 MCP servers 配置（首次运行时写入）
 _DEFAULT_MCP_SERVERS: dict = {
     "duckduckgo": {
-        "command": "python",
-        "args": ["-m", "duckduckgo_mcp_server"],
+        "command": "duckduckgo-mcp-server",
+        "args": [],
         "env": {},
         "enabled": True,
         "description": "DuckDuckGo web search (free, no API key required)",
     }
 }
+
+
+def _normalize_config(config: dict) -> tuple[dict, bool]:
+    """
+    规范化 MCP 配置。
+
+    目前主要兼容旧版 DuckDuckGo 默认配置：
+      python -m duckduckgo_mcp_server
+    改为：
+      duckduckgo-mcp-server
+    """
+    changed = False
+    normalized = json.loads(json.dumps(config))
+
+    duck_cfg = normalized.get("duckduckgo")
+    if isinstance(duck_cfg, dict):
+        command = duck_cfg.get("command")
+        args = duck_cfg.get("args", [])
+        if command in {"python", "python3"} and args == ["-m", "duckduckgo_mcp_server"]:
+            duck_cfg["command"] = "duckduckgo-mcp-server"
+            duck_cfg["args"] = []
+            changed = True
+
+    return normalized, changed
 
 
 def _ensure_default_config() -> None:
@@ -63,7 +87,15 @@ def _load_config() -> dict:
     """读取 mcp_servers.json，返回配置字典。"""
     _ensure_default_config()
     try:
-        return json.loads(MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+        config = json.loads(MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+        normalized, changed = _normalize_config(config)
+        if changed:
+            MCP_CONFIG_PATH.write_text(
+                json.dumps(normalized, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _log.info("已自动修正 MCP 配置中的旧版 DuckDuckGo 启动命令: %s", MCP_CONFIG_PATH)
+        return normalized
     except Exception as e:
         _log.warning("读取 MCP 配置失败: %s，使用默认配置", e)
         return _DEFAULT_MCP_SERVERS
@@ -153,32 +185,36 @@ class MCPManager:
         params = StdioServerParameters(command=command, args=args, env=env)
 
         stack = AsyncExitStack()
-        read, write = await stack.enter_async_context(stdio_client(params))
-        session: ClientSession = await stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
-        self._sessions[name] = session
-        self._exit_stacks[name] = stack
+        try:
+            read, write = await stack.enter_async_context(stdio_client(params))
+            session: ClientSession = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
 
-        # 获取工具列表
-        tools_result = await session.list_tools()
-        registered = []
-        for tool in tools_result.tools:
-            tool_name = f"mcp__{name}__{tool.name}"
-            self._tool_to_server[tool_name] = name
+            # 获取工具列表
+            tools_result = await session.list_tools()
+            registered = []
+            for tool in tools_result.tools:
+                tool_name = f"mcp__{name}__{tool.name}"
+                self._tool_to_server[tool_name] = name
 
-            # 转换为 OpenAI function calling 格式
-            input_schema = tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}}
-            self._tool_definitions.append({
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "description": f"[MCP:{name}] {tool.description or tool.name}",
-                    "parameters": input_schema,
-                },
-            })
-            registered.append(tool.name)
+                # 转换为 OpenAI function calling 格式
+                input_schema = tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}}
+                self._tool_definitions.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "description": f"[MCP:{name}] {tool.description or tool.name}",
+                        "parameters": input_schema,
+                    },
+                })
+                registered.append(tool.name)
 
-        _log.info("MCP server '%s' 连接成功，已注册工具: %s", name, registered)
+            self._sessions[name] = session
+            self._exit_stacks[name] = stack
+            _log.info("MCP server '%s' 连接成功，已注册工具: %s", name, registered)
+        except Exception:
+            await stack.aclose()
+            raise
 
     # ------------------------------------------------------------------
     # 公开接口

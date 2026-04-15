@@ -171,8 +171,10 @@ You: /config
 配置已保存，Agent 已重新初始化。
 ```
 
-> 支持的提供商：DeepSeek、ChatGPT (OpenAI)、通义千问 (Qwen)、Gemini (Google)、GLM (智谱AI)、MiniMax。
-> 主提供商限速时将自动按 GLM → MiniMax 顺序回退。
+> 支持的提供商：OpenRouter、DeepSeek、ChatGPT (OpenAI)、通义千问 (Qwen)、Gemini (Google)、GLM (智谱AI)、MiniMax。
+> 默认提供商为 OpenRouter，默认模型为 `openai/gpt-oss-120b:free`。
+> OpenRouter 内置免费模型：`openai/gpt-oss-120b:free`、`qwen/qwen3-next-80b-a3b-instruct:free`、`z-ai/glm-4.5-air:free`、`minimax/minimax-m2.5:free`。
+> 主提供商限速时将自动按 OpenAI → GLM → MiniMax 顺序回退。
 
 ## 对话示例
 

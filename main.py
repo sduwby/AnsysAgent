@@ -64,6 +64,8 @@ _log_port = _start_log_server()
 
 console = Console()
 VERSION = "0.1.0"
+USER_PROMPT_RICH = "\n[bold green]用户[/bold green]> "
+ASSISTANT_PROMPT_RICH = "\n[bold cyan]AnsysAgent[/bold cyan]> "
 
 # ---------------------------------------------------------------------------
 # 彩蛋素材
@@ -160,7 +162,7 @@ else:
 WELCOME = (
     "[bold cyan]Ansys 电机仿真智能助手[/bold cyan]\n"
     "支持电磁仿真、热分析、NVH结构振动、Circuit联仿、参数化扫描与 optiSLang 优化\n"
-    "基于 AEDT 2024，支持 DeepSeek / ChatGPT / Claude / Qwen / Gemini\n\n"
+    "基于 AEDT ，支持 DeepSeek / ChatGPT / Claude / Qwen / Gemini\n\n"
     "[dim]输入自然语言描述需求，例如：\n"
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
@@ -515,7 +517,7 @@ def _show_help(console: Console) -> None:
     # ── /config ───────────────────────────────────────────────────────────
     console.print(Panel(
         "  交互式配置 LLM 提供商、API Key 和模型\n"
-        "  支持：[cyan]DeepSeek / OpenAI / Qwen / Gemini / GLM / MiniMax[/cyan]\n"
+        "  支持：[cyan]OpenRouter / DeepSeek / OpenAI / Qwen / Gemini / GLM / MiniMax[/cyan]\n"
         f"  配置持久化至：[dim]{data_dir}/.env[/dim]",
         title="[bold green]/config[/bold green]  — LLM 配置",
         border_style="green",
@@ -580,14 +582,23 @@ def _stream_response(agent, user_input: str) -> str:
     """流式渲染 agent 回复，工具调用实时显示。返回完整回复文本（用于日志）。"""
     text_buf = ""
     in_text = False
+    assistant_prefix_printed = False
 
     for chunk in agent.chat_stream(user_input):
         if chunk.startswith("\x00TOOL\x00"):
             # 工具调用通知
+            if not assistant_prefix_printed:
+                console.print(ASSISTANT_PROMPT_RICH, end="")
+                assistant_prefix_printed = True
+                console.print()
             payload = chunk[len("\x00TOOL\x00"):]
             console.print(f"[dim]🔧 调用工具: [bold]{payload.split(':', 1)[0]}[/bold][/dim]")
         elif chunk.startswith("\x00TOOL_RESULT\x00"):
             # 工具执行结果
+            if not assistant_prefix_printed:
+                console.print(ASSISTANT_PROMPT_RICH, end="")
+                assistant_prefix_printed = True
+                console.print()
             result = chunk[len("\x00TOOL_RESULT\x00"):]
             color = "green" if result.startswith("✓") else "red"
             console.print(f"[{color}]  {result}[/{color}]")
@@ -596,12 +607,16 @@ def _stream_response(agent, user_input: str) -> str:
             text_buf += chunk
             if not in_text:
                 in_text = True
-                console.print()  # 换行，与工具输出分隔
+                if not assistant_prefix_printed:
+                    console.print(ASSISTANT_PROMPT_RICH, end="")
+                    assistant_prefix_printed = True
+                elif text_buf == chunk:
+                    console.print()
 
             # 直接打印每个 token（不等待整段完成）
             console.print(chunk, end="", highlight=False, markup=False)
 
-    if in_text:
+    if in_text or assistant_prefix_printed:
         console.print()  # 最后换行
 
     return text_buf
@@ -876,9 +891,11 @@ def cli(prompt: str | None):
         while True:
             try:
                 if ptk_session is not None:
-                    user_input = ptk_session.prompt("\n用户> ").strip()
+                    user_input = ptk_session.prompt(
+                        HTML("\n<ansigreen><b>用户</b></ansigreen>&gt; ")
+                    ).strip()
                 else:
-                    user_input = Prompt.ask("\n[bold green]用户[/bold green]").strip()
+                    user_input = Prompt.ask(USER_PROMPT_RICH[:-2]).strip()
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]再见。[/dim]")
                 _log.info("用户退出（KeyboardInterrupt/EOFError）")

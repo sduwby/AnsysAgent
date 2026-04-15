@@ -1,0 +1,9 @@
+{
+  "duckduckgo": {
+    "command": "duckduckgo-mcp-server",
+    "args": [],
+    "env": {},
+    "enabled": true,
+    "description": "DuckDuckGo web search (free, no API key required)"
+  }
+}
