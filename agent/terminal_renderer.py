@@ -83,8 +83,22 @@ def render_markdown_block(block: str):
 
 
 def _render_streaming_block(block: str):
-    if _should_defer_render(block):
-        return Text(block)
+    # 检查是否是fenced block（代码块）
+    if _is_fenced_block(block):
+        lines = block.splitlines()
+        # 检查是否有结束的fence标记（第二个```）
+        fence_count = sum(1 for line in lines if line.lstrip().startswith("```"))
+        is_complete = fence_count >= 2
+        
+        if not is_complete:
+            # 检查是否是flowchart块
+            language, body = _parse_fenced_block(block)
+            if language.startswith("flowchart") or body.lstrip().startswith("flowchart "):
+                # flowchart块即使不完整也要流式输出,返回纯文本
+                return Text(body if body else "")
+            # 其他不完整的代码块返回None,避免显示残缺内容
+            return None
+    
     return render_markdown_block(block)
 
 
@@ -173,10 +187,15 @@ class AssistantStreamRenderer:
                 renderables.append(Text(""))
             renderables.append(renderable)
         if unstable_blocks:
-            unstable_block = "\n\n".join(unstable_blocks)
-            if renderables:
-                renderables.append(Text(""))
-            renderables.append(_render_streaming_block(unstable_block))
+            # 对每个unstable_block单独渲染，而不是合并后再渲染
+            # 这样可以正确处理不完整的flowchart块
+            for unstable_block in unstable_blocks:
+                rendered = _render_streaming_block(unstable_block)
+                # 过滤掉None值（不完整的flowchart块）
+                if rendered is not None:
+                    if renderables:
+                        renderables.append(Text(""))
+                    renderables.append(rendered)
         self._live.update(Group(*renderables) if renderables else Text(""), refresh=True)
 
     def _unstable_blocks(self) -> list[str]:
@@ -240,8 +259,10 @@ def _render_fenced_block(block: str):
         return _render_sql_block(body)
     if language == "csv":
         return _render_csv_block(body)
+    # 对于flowchart块，直接返回纯文本，不使用Panel包裹
     if language.startswith("flowchart") or body.lstrip().startswith("flowchart "):
-        return _render_flowchart_block(body if body.strip() else language)
+        return Text(body)
+    # 其他代码块使用Panel包裹
     return Panel(Text(body), title=language or "code", border_style="dim")
 
 
@@ -250,10 +271,8 @@ def _is_cacheable_block(block: str) -> bool:
 
 
 def _should_defer_render(block: str) -> bool:
-    if not _is_fenced_block(block):
-        return False
-    language, body = _parse_fenced_block(block)
-    return language.startswith("flowchart") or body.lstrip().startswith("flowchart ")
+    # 移除flowchart的延迟渲染逻辑,让所有块都正常流式输出
+    return False
 
 
 def _looks_like_table_start(header: str, separator: str) -> bool:
