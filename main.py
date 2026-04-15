@@ -26,7 +26,7 @@ except ImportError:
     _PTK_AVAILABLE = False
 
 from agent.commands import command_registry, CommandContext, DispatchResult
-from agent.config_manager import run_config_wizard
+from agent.config_manager import run_config_wizard, set_thinking_enabled, model_supports_thinking
 from agent.logger import setup_logging, get_logger
 from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
 
@@ -66,6 +66,7 @@ console = Console()
 VERSION = "0.1.0"
 USER_PROMPT_RICH = "\n[bold green]用户[/bold green]> "
 ASSISTANT_PROMPT_RICH = "\n[bold cyan]AnsysAgent[/bold cyan]> "
+THINKING_PROMPT_RICH = "[bold magenta]AnsysAgent Thinking[/bold magenta]> "
 
 # ---------------------------------------------------------------------------
 # 彩蛋素材
@@ -598,6 +599,7 @@ def _show_help(console: Console) -> None:
     # ── 其他命令 ──────────────────────────────────────────────────────────
     console.print(Panel(
         "  [dim]/clear  /new[/dim]   → 清空对话历史，开始新对话\n"
+        "  [dim]/thinking[/dim]      → 开关 thinking / reasoning（仅支持的模型可用）\n"
         "  [dim]/purge  /clean[/dim] → [red]删除所有本地数据[/red]（配置/索引/日志/规则/技能），不可撤销\n"
         "  [dim]/memory[/dim]         → 查看 memory 索引和已保存条目\n"
         "  [dim]/mcp[/dim]            → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
@@ -615,14 +617,41 @@ def _stream_response(agent, user_input: str) -> str:
     text_buf = ""
     in_text = False
     assistant_prefix_printed = False
+    in_thinking = False
 
     for chunk in agent.chat_stream(user_input):
-        if chunk.startswith("\x00TOOL\x00"):
+        if chunk == "\x00THINKING_START\x00":
+            if not assistant_prefix_printed:
+                console.print(ASSISTANT_PROMPT_RICH, end="")
+                assistant_prefix_printed = True
+                console.print()
+            if in_text:
+                console.print()
+                in_text = False
+            console.print(THINKING_PROMPT_RICH, end="")
+            in_thinking = True
+        elif chunk == "\x00THINKING_END\x00":
+            if in_thinking:
+                console.print()
+                in_thinking = False
+        elif chunk.startswith("\x00THINKING\x00"):
+            if not in_thinking:
+                if not assistant_prefix_printed:
+                    console.print(ASSISTANT_PROMPT_RICH, end="")
+                    assistant_prefix_printed = True
+                    console.print()
+                console.print(THINKING_PROMPT_RICH, end="")
+                in_thinking = True
+            console.print(chunk[len("\x00THINKING\x00"):], end="", highlight=False, markup=False, style="magenta")
+        elif chunk.startswith("\x00TOOL\x00"):
             # 工具调用通知
             if not assistant_prefix_printed:
                 console.print(ASSISTANT_PROMPT_RICH, end="")
                 assistant_prefix_printed = True
                 console.print()
+            if in_thinking:
+                console.print()
+                in_thinking = False
             payload = chunk[len("\x00TOOL\x00"):]
             console.print(f"[dim]🔧 调用工具: [bold]{payload.split(':', 1)[0]}[/bold][/dim]")
         elif chunk.startswith("\x00TOOL_RESULT\x00"):
@@ -631,6 +660,9 @@ def _stream_response(agent, user_input: str) -> str:
                 console.print(ASSISTANT_PROMPT_RICH, end="")
                 assistant_prefix_printed = True
                 console.print()
+            if in_thinking:
+                console.print()
+                in_thinking = False
             result = chunk[len("\x00TOOL_RESULT\x00"):]
             color = "green" if result.startswith("✓") else "red"
             console.print(f"[{color}]  {result}[/{color}]")
@@ -639,6 +671,9 @@ def _stream_response(agent, user_input: str) -> str:
             text_buf += chunk
             if not in_text:
                 in_text = True
+                if in_thinking:
+                    console.print()
+                    in_thinking = False
                 if not assistant_prefix_printed:
                     console.print(ASSISTANT_PROMPT_RICH, end="")
                     assistant_prefix_printed = True
@@ -648,6 +683,8 @@ def _stream_response(agent, user_input: str) -> str:
             # 直接打印每个 token（不等待整段完成）
             console.print(chunk, end="", highlight=False, markup=False)
 
+    if in_thinking:
+        console.print()
     if in_text or assistant_prefix_printed:
         console.print()  # 最后换行
 
@@ -790,6 +827,7 @@ def _make_status_handler(agent_ref) -> "Callable":
         hist = getattr(agent_ref, "history", [])
         model = getattr(agent_ref, "model", "未知")
         provider = getattr(agent_ref, "_primary_provider", "未知")
+        thinking_enabled = getattr(agent_ref, "thinking_enabled", False)
         token_est = _estimate_tokens(hist) if hist else 0
 
         # MCP 状态
@@ -808,6 +846,7 @@ def _make_status_handler(agent_ref) -> "Callable":
 
         ctx.console.print(Panel(
             f"  [bold]模型[/bold]       {model}  [dim]({provider})[/dim]\n"
+            f"  [bold]Thinking[/bold]  {'开启' if thinking_enabled else '关闭'}\n"
             f"  [bold]历史记录[/bold]   {len(hist)} 条消息\n"
             f"  [bold]估算 token[/bold] {token_est:,}\n"
             f"  [bold]MCP[/bold]        {mcp_line}",
@@ -817,6 +856,43 @@ def _make_status_handler(agent_ref) -> "Callable":
         ))
         return DispatchResult.HANDLED
     return _handle_status
+
+
+def _make_thinking_handler(agent_ref) -> "Callable":
+    def _handle_thinking(ctx: CommandContext) -> str:
+        arg = (ctx.args or "").strip().lower()
+        provider = getattr(agent_ref, "_primary_provider", "")
+        model = getattr(agent_ref, "model", "")
+
+        if not model_supports_thinking(provider, model):
+            ctx.console.print(
+                f"[yellow]当前模型 {model} 暂不支持 thinking / reasoning，无法开启。[/yellow]"
+            )
+            return DispatchResult.HANDLED
+
+        current = bool(getattr(agent_ref, "thinking_enabled", False))
+        if arg in {"", "status"}:
+            ctx.console.print(
+                f"[cyan]Thinking 当前为：{'开启' if current else '关闭'}[/cyan] [dim]({model})[/dim]"
+            )
+            return DispatchResult.HANDLED
+
+        if arg in {"on", "enable", "true", "1", "开启"}:
+            enabled = True
+        elif arg in {"off", "disable", "false", "0", "关闭"}:
+            enabled = False
+        else:
+            ctx.console.print("[yellow]用法：/thinking on | /thinking off | /thinking status[/yellow]")
+            return DispatchResult.HANDLED
+
+        set_thinking_enabled(enabled)
+        load_dotenv(override=True)
+        agent_ref.reload_config()
+        ctx.console.print(
+            f"[green]✓ Thinking 已{'开启' if enabled else '关闭'}[/green] [dim]({agent_ref.model})[/dim]"
+        )
+        return DispatchResult.HANDLED
+    return _handle_thinking
 
 
 def _make_history_handler(agent_ref) -> "Callable":
@@ -889,6 +965,7 @@ def _register_commands(agent) -> None:
     r.register("/purge",   "删除所有本地数据（不可撤销）",       _handle_purge,
                aliases=["/clean"])
     r.register("/status",  "显示当前会话状态（模型/历史/MCP）",  _make_status_handler(agent))
+    r.register("/thinking","切换模型 thinking / reasoning",      _make_thinking_handler(agent))
     r.register("/history", "查看最近对话记录（可指定条数）",     _make_history_handler(agent))
     r.register("/coffee",  "☕ 彩蛋",                           _handle_coffee)
     r.register("/motor",   "⚡ 彩蛋",                           _handle_motor)

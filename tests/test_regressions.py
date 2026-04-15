@@ -409,6 +409,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(cfg.provider, "openrouter")
         self.assertEqual(cfg.base_url, "https://openrouter.ai/api/v1")
         self.assertEqual(cfg.model, "openai/gpt-oss-120b:free")
+        self.assertFalse(cfg.thinking_enabled)
 
     def test_memory_manager_save_and_find_relevant(self):
         manager = MemoryManager()
@@ -562,6 +563,23 @@ class RegressionTests(unittest.TestCase):
             cfg = config_manager.load_llm_config()
         self.assertEqual(cfg.provider, "openrouter")
         self.assertEqual(cfg.api_key, "openrouter-legacy-key")
+
+    def test_load_llm_config_reads_thinking_flag(self):
+        env = {
+            "LLM_PROVIDER": "openrouter",
+            "LLM_API_KEY": "demo",
+            "LLM_MODEL": "openai/gpt-oss-120b:free",
+            "LLM_THINKING": "true",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            cfg = config_manager.load_llm_config()
+        self.assertTrue(cfg.thinking_enabled)
+
+    def test_model_supports_thinking_matches_known_models(self):
+        self.assertTrue(config_manager.model_supports_thinking("openrouter", "openai/gpt-oss-120b:free"))
+        self.assertTrue(config_manager.model_supports_thinking("openrouter", "z-ai/glm-4.5-air:free"))
+        self.assertTrue(config_manager.model_supports_thinking("openrouter", "minimax/minimax-m2.5:free"))
+        self.assertFalse(config_manager.model_supports_thinking("openrouter", "qwen/qwen3-next-80b-a3b-instruct:free"))
 
     def test_load_llm_config_uses_builtin_gemini_key_when_env_missing(self):
         env = {
@@ -899,8 +917,8 @@ class RegressionTests(unittest.TestCase):
 
     def test_streaming_tool_loop_yields_text_and_tool_result(self):
         class _Chunk:
-            def __init__(self, content=None, tool_calls=None):
-                delta = types.SimpleNamespace(content=content, tool_calls=tool_calls)
+            def __init__(self, content=None, tool_calls=None, reasoning=None):
+                delta = types.SimpleNamespace(content=content, tool_calls=tool_calls, reasoning=reasoning)
                 self.choices = [types.SimpleNamespace(delta=delta)]
 
         class _ToolDelta:
@@ -941,6 +959,34 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(calls, [("demo_tool", {"x": 1})])
         self.assertTrue(context.success)
         self.assertEqual(context.output, "done")
+
+    def test_streaming_tool_loop_yields_reasoning_markers(self):
+        class _Chunk:
+            def __init__(self, content=None, tool_calls=None, reasoning=None):
+                delta = types.SimpleNamespace(content=content, tool_calls=tool_calls, reasoning=reasoning)
+                self.choices = [types.SimpleNamespace(delta=delta)]
+
+        responses = [[
+            _Chunk(reasoning="step1 "),
+            _Chunk(reasoning="step2"),
+            _Chunk(content="answer"),
+        ]]
+
+        def _llm_stream_invoke(context):
+            return responses.pop(0)
+
+        node = omagent_runtime.StreamingToolLoopNode(
+            llm_stream_invoke=_llm_stream_invoke,
+            tool_invoke=lambda name, args, context: "",
+        )
+        context = omagent_runtime.OmAgentContext(task="demo")
+        chunks = list(node.stream(context))
+        self.assertEqual(
+            chunks,
+            ["\x00THINKING_START\x00", "\x00THINKING\x00step1 ", "\x00THINKING\x00step2", "\x00THINKING_END\x00", "answer"],
+        )
+        self.assertEqual(context.output, "answer")
+        self.assertEqual(context.messages[-1]["reasoning"], "step1 step2")
 
     def test_chat_agent_prepare_chat_context_sets_messages(self):
         agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)

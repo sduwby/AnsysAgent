@@ -144,6 +144,39 @@ def _parse_tool_arguments(arguments: str) -> dict[str, Any]:
         return {}
 
 
+def _extract_reasoning_delta(delta: Any) -> str:
+    """从流式 delta 中提取 reasoning / thinking 文本。"""
+    reasoning = getattr(delta, "reasoning", None)
+    if isinstance(reasoning, str):
+        return reasoning
+    if isinstance(reasoning, list):
+        parts = []
+        for item in reasoning:
+            text = getattr(item, "text", None)
+            if text:
+                parts.append(text)
+            elif isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+
+    reasoning_details = getattr(delta, "reasoning_details", None)
+    if isinstance(reasoning_details, list):
+        parts = []
+        for item in reasoning_details:
+            text = getattr(item, "text", None)
+            if text:
+                parts.append(text)
+            elif isinstance(item, dict):
+                if item.get("text"):
+                    parts.append(str(item["text"]))
+                elif item.get("reasoning"):
+                    parts.append(str(item["reasoning"]))
+        return "".join(parts)
+    return ""
+
+
 class ToolLoopNode(OmAgentNode):
     """
     通用工具调用节点。
@@ -254,14 +287,27 @@ class StreamingToolLoopNode(OmAgentNode):
         for _turn in turns:
             stream = self._llm_stream_invoke(context)
             full_content = ""
+            full_reasoning = ""
             tool_calls_acc: dict[int, dict[str, str]] = {}
+            reasoning_started = False
 
             for chunk in stream:
                 if not getattr(chunk, "choices", None):
                     continue
                 delta = chunk.choices[0].delta
 
+                reasoning_text = _extract_reasoning_delta(delta)
+                if reasoning_text:
+                    if not reasoning_started:
+                        reasoning_started = True
+                        yield "\x00THINKING_START\x00"
+                    full_reasoning += reasoning_text
+                    yield f"\x00THINKING\x00{reasoning_text}"
+
                 if getattr(delta, "content", None):
+                    if reasoning_started:
+                        yield "\x00THINKING_END\x00"
+                        reasoning_started = False
                     full_content += delta.content
                     yield delta.content
 
@@ -279,6 +325,9 @@ class StreamingToolLoopNode(OmAgentNode):
                             if getattr(tc_delta.function, "arguments", None):
                                 entry["arguments"] += tc_delta.function.arguments
 
+            if reasoning_started:
+                yield "\x00THINKING_END\x00"
+
             if tool_calls_acc:
                 tool_calls_list = [
                     {
@@ -295,6 +344,9 @@ class StreamingToolLoopNode(OmAgentNode):
                 }
             else:
                 assistant_message = {"role": "assistant", "content": full_content}
+
+            if full_reasoning:
+                assistant_message["reasoning"] = full_reasoning
 
             context.messages.append(assistant_message)
             if self._on_assistant_message:

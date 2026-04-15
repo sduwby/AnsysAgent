@@ -16,7 +16,13 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from agent.config_manager import load_llm_config, PROVIDERS, FALLBACK_CHAIN, get_provider_api_key
+from agent.config_manager import (
+    load_llm_config,
+    PROVIDERS,
+    FALLBACK_CHAIN,
+    get_provider_api_key,
+    model_supports_thinking,
+)
 from agent.memory_manager import MemoryManager
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
@@ -349,6 +355,7 @@ class ChatAgent:
         cfg = load_llm_config()
         self.client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
         self.model = cfg.model
+        self.thinking_enabled = cfg.thinking_enabled
         self._primary_provider = cfg.provider
         self._primary_model = cfg.model
         # 预构建回退链客户端 [(client, model, provider_name), ...]
@@ -365,6 +372,15 @@ class ChatAgent:
             fb_client = OpenAI(api_key=api_key, base_url=pinfo["base_url"])
             fb_model = pinfo["models"][0]
             self._fallback_clients.append((fb_client, fb_model, pinfo["name"]))
+
+    def _build_reasoning_options(self, provider: str, model: str) -> dict[str, Any]:
+        if not self.thinking_enabled:
+            return {}
+        if not model_supports_thinking(provider, model):
+            return {}
+        if provider == "openrouter":
+            return {"reasoning": {"enabled": True}}
+        return {"reasoning": {"enabled": True}}
 
     def reload_config(self) -> None:
         """重新加载配置并重建客户端（保留对话历史）。"""
@@ -383,9 +399,14 @@ class ChatAgent:
         执行 call_fn(client, model, *args, **kwargs)，失败时按回退链重试。
         call_fn 签名：call_fn(client: OpenAI, model: str, **kwargs) -> response
         """
+        def _call_kwargs(provider_key: str, model: str) -> dict[str, Any]:
+            merged = dict(kwargs)
+            merged.update(self._build_reasoning_options(provider_key, model))
+            return merged
+
         # 先用主客户端尝试
         try:
-            return call_fn(self.client, self.model, **kwargs)
+            return call_fn(self.client, self.model, **_call_kwargs(self._primary_provider, self.model))
         except Exception as e:
             if not _is_fallback_error(e):
                 _log.error("API 请求异常（非回退类）: %s", e, exc_info=True)
@@ -407,7 +428,11 @@ class ChatAgent:
             try:
                 _log.info("回退切换到: %s (%s)", fb_name, fb_model)
                 console.print(f"[dim]  → 切换到 {fb_name} ({fb_model})[/dim]")
-                return call_fn(fb_client, fb_model, **kwargs)
+                fb_provider = next(
+                    (key for key, info in PROVIDERS.items() if info.get("name") == fb_name),
+                    "",
+                )
+                return call_fn(fb_client, fb_model, **_call_kwargs(fb_provider, fb_model))
             except Exception as e:
                 if not _is_fallback_error(e):
                     _log.error("回退提供商 %s 异常（非回退类）: %s", fb_name, e, exc_info=True)
@@ -471,6 +496,7 @@ class ChatAgent:
                 messages=run_context.messages,
                 tools=tools,
                 tool_choice="auto",
+                **self._build_reasoning_options(self._primary_provider, self.model),
             )
 
         def _invoke_tool(tool_name: str, tool_input: dict[str, Any], _run_context: OmAgentContext) -> str:
@@ -550,6 +576,7 @@ class ChatAgent:
                 messages=run_context.messages,
                 tools=tools,
                 tool_choice="auto",
+                **self._build_reasoning_options(self._primary_provider, self.model),
             )
 
         def _invoke_tool(tool_name: str, tool_input: dict[str, Any], _run_context: OmAgentContext) -> str:
