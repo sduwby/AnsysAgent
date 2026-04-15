@@ -1,7 +1,7 @@
 """
-Role 管理器：管理用户自定义角色（system prompt 附加片段）。
+Role 管理器：管理用户自定义规则（system prompt 附加片段）。
 
-持久化目录：{ANSYS_DATA_DIR}/roles/
+持久化目录：{ANSYS_DATA_DIR}/rules/
 文件格式：Markdown（.md），每个文件为一个 role。
 
 限制：
@@ -73,7 +73,7 @@ class RoleManager:
         roles = self.list_roles()
         if not roles:
             return ""
-        parts = ["## 当前激活的用户角色定义（请在回复时遵守以下角色设定）\n"]
+        parts = ["## 当前激活的用户规则定义（请在回复时遵守以下规则设定）\n"]
         for name in roles:
             content = self.get_role(name)
             if content:

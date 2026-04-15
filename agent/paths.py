@@ -1,7 +1,7 @@
 """
 AnsysAgent 统一数据目录。
 
-所有运行时可写文件（配置、RAG 索引、日志、技能、角色等）均存放于此目录，
+所有运行时可写文件（配置、RAG 索引、日志、技能、规则等）均存放于此目录，
 避免污染项目目录或 exe 同级目录，同时解决打包模式下的路径读写不一致问题。
 
 默认位置：
@@ -16,7 +16,7 @@ AnsysAgent 统一数据目录。
     knowledge/            ← 用户扩展知识库（official / internal）
     logs/                 ← 运行日志
     skills/               ← 用户自定义技能（SKILL.md）
-    roles/                ← 用户自定义角色（*.md，最多 5 个，每个最多 200 行）
+    roles/                ← 用户自定义规则（*.md，最多 5 个，每个最多 200 行）
     mcp_servers.json      ← MCP server 配置（首次运行自动生成含 DuckDuckGo 默认配置）
 """
 

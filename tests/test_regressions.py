@@ -452,6 +452,93 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("MEMORY.md", context)
         self.assertIn("reference-dashboard", context)
 
+    def test_tool_loop_allows_unbounded_turns_when_max_turns_none(self):
+        call_count = {"n": 0}
+
+        def _llm_invoke(ctx):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return types.SimpleNamespace(
+                    choices=[types.SimpleNamespace(
+                        message=types.SimpleNamespace(
+                            content="",
+                            tool_calls=[
+                                types.SimpleNamespace(
+                                    id="call-1",
+                                    function=types.SimpleNamespace(name="dummy_tool", arguments="{}"),
+                                )
+                            ],
+                        )
+                    )]
+                )
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(
+                    message=types.SimpleNamespace(content="done", tool_calls=None)
+                )]
+            )
+
+        node = omagent_runtime.ToolLoopNode(
+            llm_invoke=_llm_invoke,
+            tool_invoke=lambda name, args, ctx: '{"success": true}',
+            max_turns=None,
+        )
+        ctx = omagent_runtime.OmAgentContext(task="demo")
+        node.run(ctx)
+        self.assertTrue(ctx.success)
+        self.assertEqual(ctx.output, "done")
+        self.assertEqual(ctx.error, "")
+
+    def test_prepare_chat_context_fits_budget_before_appending_current_user(self):
+        agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)
+        agent.history = [{"role": "user", "content": "old message"}]
+        agent._build_knowledge_context = lambda _: ""
+        agent._build_system_messages = lambda knowledge, user: [{"role": "system", "content": "sys"}]
+
+        observed = {"called": False}
+
+        def _fit(system_messages, pending_user_message):
+            observed["called"] = True
+            self.assertEqual(pending_user_message, "current request")
+            self.assertEqual(agent.history[-1]["content"], "old message")
+
+        agent._fit_history_to_budget = _fit
+        ctx = omagent_runtime.OmAgentContext(task="current request", metadata={})
+        agent._prepare_chat_context(ctx, [])
+        self.assertTrue(observed["called"])
+        self.assertEqual(agent.history[-1]["content"], "current request")
+        self.assertEqual(ctx.messages[-1]["content"], "current request")
+
+    def test_fit_history_to_budget_trims_old_messages_against_final_message_budget(self):
+        agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)
+        agent.history = [{"role": "user", "content": f"msg-{i} " * 40} for i in range(12)]
+        agent._maybe_compress_history = lambda: None
+        system_messages = [{"role": "system", "content": "system prompt " * 20}]
+
+        with patch.object(chat_agent, "_MESSAGE_BUDGET", 120), patch.object(chat_agent, "_MIN_HISTORY_TO_KEEP", 3):
+            agent._fit_history_to_budget(system_messages, "current user request " * 10)
+
+        self.assertLessEqual(len(agent.history), 3)
+        self.assertEqual(agent.history[-1]["content"], "msg-11 " * 40)
+
+    def test_fit_history_to_budget_prefers_trimming_tool_messages_first(self):
+        agent = chat_agent.ChatAgent.__new__(chat_agent.ChatAgent)
+        user_msg = {"role": "user", "content": "important user context " * 6}
+        tool_msg = {"role": "tool", "content": '{"success": true, "result": "' + ("x" * 220) + '"}'}
+        assistant_tool_call = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "1", "type": "function", "function": {"name": "demo", "arguments": "{}"}}],
+        }
+        agent.history = [user_msg, tool_msg, assistant_tool_call, {"role": "assistant", "content": "final answer"}]
+        agent._maybe_compress_history = lambda: None
+        system_messages = [{"role": "system", "content": "sys"}]
+
+        with patch.object(chat_agent, "_MESSAGE_BUDGET", 140), patch.object(chat_agent, "_MIN_HISTORY_TO_KEEP", 1):
+            agent._fit_history_to_budget(system_messages, "current request")
+
+        self.assertIn(user_msg, agent.history)
+        self.assertNotIn(tool_msg, agent.history)
+
     def test_load_llm_config_uses_provider_specific_key(self):
         env = {
             "LLM_PROVIDER": "openai",

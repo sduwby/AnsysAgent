@@ -150,7 +150,7 @@ class SubAgentBase:
             run_context.output = f"{self.description}已完成任务，共执行 {len(run_context.steps)} 个步骤。"
             run_context.metadata["final_summary"] = run_context.output
 
-    def build_workflow(self, task: str, context: str = "", max_turns: int = 30) -> OmAgentWorkflow:
+    def build_workflow(self, task: str, context: str = "", max_turns: int | None = None) -> OmAgentWorkflow:
         """构造当前 Sub-Agent 的 OmAgent 风格工作流。"""
 
         def _invoke_llm(run_context: OmAgentContext):
@@ -187,7 +187,7 @@ class SubAgentBase:
     # 主执行方法
     # ------------------------------------------------------------------
 
-    def execute(self, task: str, context: str = "", max_turns: int = 30) -> dict:
+    def execute(self, task: str, context: str = "", max_turns: int | None = None) -> dict:
         """
         运行工具调用循环，直到 LLM 返回文本（无工具调用）或达到 max_turns。
         返回结构：{"success": bool, "agent": str, "result": str, "steps": list}
@@ -207,7 +207,10 @@ class SubAgentBase:
                 "metadata": result.metadata,
             }
 
-        failure = result.error or f"Sub-agent '{self.name}' 已达到最大轮次 ({max_turns})，任务未完成"
+        if max_turns is None:
+            failure = result.error or f"Sub-agent '{self.name}' 未完成任务"
+        else:
+            failure = result.error or f"Sub-agent '{self.name}' 已达到最大轮次 ({max_turns})，任务未完成"
         return {
             "success": False,
             "agent": self.name,
@@ -216,6 +219,6 @@ class SubAgentBase:
             "metadata": result.metadata,
         }
 
-    def run(self, task: str, context: str = "", max_turns: int = 30) -> dict:
+    def run(self, task: str, context: str = "", max_turns: int | None = None) -> dict:
         """OmAgent 风格别名，便于 Dispatcher/Workflow 统一调用。"""
         return self.execute(task=task, context=context, max_turns=max_turns)

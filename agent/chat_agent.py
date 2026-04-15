@@ -96,8 +96,10 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return total
 
 
-_COMPRESS_THRESHOLD = 80_000   # 超过此 token 数触发压缩
+_COMPRESS_THRESHOLD = 80_000   # 历史自身超过此 token 数触发压缩
 _KEEP_RECENT = 20              # 压缩后保留的最新消息条数
+_MESSAGE_BUDGET = 72_000       # 最终发送给模型的 messages 总预算
+_MIN_HISTORY_TO_KEEP = 8       # 若系统上下文过大，至少保留的历史消息条数
 
 _COMPRESS_SYSTEM = (
     "你是一个专业的工程对话摘要助手。"
@@ -230,7 +232,7 @@ class ChatAgent:
             lines.append(f"   摘要: {hit.get('snippet')}")
         return "\n".join(lines)
 
-    def _compose_messages(self, knowledge_context: str = "", user_message: str = "") -> list[dict]:
+    def _build_system_messages(self, knowledge_context: str = "", user_message: str = "") -> list[dict]:
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         try:
             memory_context = self._memory.build_memory_context(user_message)
@@ -238,7 +240,7 @@ class ChatAgent:
                 messages.append({"role": "system", "content": memory_context})
         except Exception as e:
             _log.warning("加载 memory 失败，跳过: %s", e)
-        # 注入用户 roles（每次对话前动态加载，支持会话中 /roles 热修改后立即生效）
+        # 注入用户 roles（每次对话前动态加载，支持会话中 /rules 热修改后立即生效）
         try:
             roles_prompt = RoleManager().get_roles_prompt()
             if roles_prompt:
@@ -247,13 +249,12 @@ class ChatAgent:
             _log.warning("加载 roles 失败，跳过: %s", e)
         if knowledge_context:
             messages.append({"role": "system", "content": knowledge_context})
-        messages.extend(self.history)
         return messages
 
     def _maybe_compress_history(self) -> None:
         """
         若历史消息估算 token 超过阈值，将旧消息压缩为摘要。
-        保留最近 _KEEP_RECENT 条消息，旧消息发给 LLM 生成摘要后以 system 角色插入。
+        保留最近 _KEEP_RECENT 条消息，旧消息发给 LLM 生成摘要后以 system 规则插入。
         """
         if _estimate_tokens(self.history) <= _COMPRESS_THRESHOLD:
             return
@@ -290,7 +291,7 @@ class ChatAgent:
                 max_tokens=1024,
             )
             summary = resp.choices[0].message.content or ""
-            # 修复：摘要改为 system 角色，避免 LLM 误将其当作用户指令
+            # 修复：摘要改为 system 规则，避免 LLM 误将其当作用户指令
             summary_msg = {
                 "role": "system",
                 "content": f"[以下是之前对话的摘要，请在后续回复中参考]\n{summary}",
@@ -301,6 +302,47 @@ class ChatAgent:
         except Exception as e:
             # 压缩失败不影响主流程，仅记录警告
             _log.warning("历史压缩失败，跳过: %s", e)
+
+    def _fit_history_to_budget(self, system_messages: list[dict], pending_user_message: str) -> None:
+        """
+        按“最终发送给模型的 messages 总量”控制上下文预算。
+
+        先尝试压缩旧历史；若仍超预算，则裁剪最旧的非 system 历史消息，
+        但至少保留最近若干条，避免当前对话完全失忆。
+        """
+        pending_user = {"role": "user", "content": pending_user_message}
+
+        def _total() -> int:
+            return _estimate_tokens(system_messages + self.history + [pending_user])
+
+        if _total() > _MESSAGE_BUDGET:
+            self._maybe_compress_history()
+
+        def _trim_priority(msg: dict) -> int:
+            role = msg.get("role")
+            content = msg.get("content")
+            tool_calls = msg.get("tool_calls")
+            if role == "tool":
+                return 0
+            if role == "assistant" and tool_calls and not content:
+                return 1
+            if role == "assistant" and tool_calls:
+                return 2
+            return 3
+
+        while _total() > _MESSAGE_BUDGET and len(self.history) > _MIN_HISTORY_TO_KEEP:
+            removable_count = len(self.history) - _MIN_HISTORY_TO_KEEP
+            removable = self.history[:removable_count]
+            drop_idx = min(
+                range(len(removable)),
+                key=lambda idx: (_trim_priority(removable[idx]), idx),
+            )
+            removed = self.history.pop(drop_idx)
+            _log.info(
+                "上下文超预算，裁剪历史消息: role=%s priority=%s",
+                removed.get("role", "?"),
+                _trim_priority(removed),
+            )
 
     def _init_client(self) -> None:
         """从当前环境配置初始化主客户端，并预构建回退客户端列表。"""
@@ -486,7 +528,7 @@ class ChatAgent:
                 ToolLoopNode(
                     llm_invoke=_invoke_llm,
                     tool_invoke=_invoke_tool,
-                    max_turns=30,
+                    max_turns=None,
                     on_assistant_message=_on_assistant_message,
                     before_tool=_before_tool,
                     after_tool=_after_tool,
@@ -543,7 +585,7 @@ class ChatAgent:
                 StreamingToolLoopNode(
                     llm_stream_invoke=_invoke_stream,
                     tool_invoke=_invoke_tool,
-                    max_turns=30,
+                    max_turns=None,
                     on_assistant_message=_on_assistant_message,
                     before_tool=_before_tool,
                     after_tool=_after_tool,
@@ -553,11 +595,12 @@ class ChatAgent:
 
     def _prepare_chat_context(self, run_context: OmAgentContext, tools: list[dict]) -> None:
         """统一准备主对话上下文，供同步/流式 workflow 共用。"""
-        self.history.append({"role": "user", "content": run_context.task})
-        self._maybe_compress_history()
         knowledge_context = self._build_knowledge_context(run_context.task)
         run_context.knowledge_context = knowledge_context
-        run_context.messages = list(self._compose_messages(knowledge_context, run_context.task))
+        system_messages = self._build_system_messages(knowledge_context, run_context.task)
+        self._fit_history_to_budget(system_messages, run_context.task)
+        self.history.append({"role": "user", "content": run_context.task})
+        run_context.messages = list(system_messages + self.history)
         run_context.metadata["tools"] = tools
 
     def chat(self, user_message: str) -> str:

@@ -167,7 +167,7 @@ WELCOME = (
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  /help 查看帮助 | /config 配置 LLM | /roles 管理规则 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]\n"
+    "  /help 查看帮助 | /config 配置 LLM | /rules 管理规则 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]\n"
     f"[dim]📋 Log viewer: http://localhost:{{_log_port}}[/dim]"
 )
 
@@ -545,14 +545,14 @@ def _show_help(console: Console) -> None:
         padding=(0, 2),
     ))
 
-    # ── /roles ────────────────────────────────────────────────────────────
+    # ── /rules ────────────────────────────────────────────────────────────
     console.print(Panel(
-        '  为 AI 设置自定义角色行为（如"用中文回答"、"专注于电磁仿真"等）\n'
+        '  为 AI 设置自定义规则行为（如"用中文回答"、"专注于电磁仿真"等）\n'
         "  操作：[yellow]添加（add）/ 修改（change）/ 删除（delete）/ 查看[/yellow]\n"
         "  每次对话前自动注入到系统提示词\n"
-        "  限制：最多 [bold]5[/bold] 个角色，每个最多 [bold]200[/bold] 行\n"
-        f"  存储位置：[dim]{data_dir}/roles/[/dim]",
-        title="[bold yellow]/roles[/bold yellow]  — 角色管理",
+        "  限制：最多 [bold]5[/bold] 个规则，每个最多 [bold]200[/bold] 行\n"
+        f"  存储位置：[dim]{data_dir}/rules/[/dim]",
+        title="[bold yellow]/rules[/bold yellow]  — 规则管理",
         border_style="yellow",
         padding=(0, 2),
     ))
@@ -598,7 +598,7 @@ def _show_help(console: Console) -> None:
     # ── 其他命令 ──────────────────────────────────────────────────────────
     console.print(Panel(
         "  [dim]/clear  /new[/dim]   → 清空对话历史，开始新对话\n"
-        "  [dim]/purge  /clean[/dim] → [red]删除所有本地数据[/red]（配置/索引/日志/角色/技能），不可撤销\n"
+        "  [dim]/purge  /clean[/dim] → [red]删除所有本地数据[/red]（配置/索引/日志/规则/技能），不可撤销\n"
         "  [dim]/memory[/dim]         → 查看 memory 索引和已保存条目\n"
         "  [dim]/mcp[/dim]            → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
         "  [dim]/exit  /quit[/dim]   → 退出程序（也可按 Ctrl+C）\n"
@@ -755,7 +755,7 @@ def _handle_purge(ctx: CommandContext) -> str:
     ctx.console.print(Panel(
         f"  即将删除：[bold red]{ANSYS_DATA_DIR}[/bold red]\n"
         "  包含：.env（LLM 配置）、.rag（知识索引）、logs（日志）、\n"
-        "        roles（角色）、skills（技能）、knowledge（用户知识库）、mcp_servers.json",
+        "        roles（规则）、skills（技能）、knowledge（用户知识库）、mcp_servers.json",
         title="[bold red]⚠ 警告：此操作不可撤销[/bold red]",
         border_style="red",
         padding=(0, 2),
@@ -880,7 +880,7 @@ def _register_commands(agent) -> None:
                aliases=["/quit"])
     r.register("/help",    "查看功能指南",                     _handle_help)
     r.register("/config",  "配置 LLM 提供商和 API Key",        _make_config_handler(agent))
-    r.register("/roles",   "管理 AI 角色（添加/修改/删除）",   _handle_roles)
+    r.register("/rules",   "管理 AI 规则（添加/修改/删除）",   _handle_roles)
     r.register("/skills",  "管理专业流程技能",                  _handle_skills)
     r.register("/memory",  "查看持久记忆条目",                  _handle_memory)
     r.register("/mcp",     "管理 MCP server",                  _make_mcp_handler(agent))

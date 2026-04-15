@@ -18,9 +18,9 @@
 - **流式输出**：实时显示回复内容，工具调用实时可见
 - **模块化工具**：92+ 内置工具覆盖电机仿真全流程，并支持通过 MCP 动态扩展额外工具
 - **本地知识增强（RAG）**：自动索引内置文档和用户扩展知识目录，支持 PDF / PPTX / Notebook / Python / Markdown 等格式
-- **技能与角色**：支持 `/roles` 管理自定义系统角色，并支持 `skills/` 目录下的专业流程技能
+- **技能与规则**：支持 `/rules` 管理自定义系统规则，并支持 `skills/` 目录下的专业流程技能
 - **持久记忆（Memory）**：支持保存用户偏好、项目背景、外部参考入口等非代码型长期上下文
-- **统一数据目录**：配置、日志、角色、技能、知识索引、MCP 配置统一写入 `ANSYS_DATA_DIR`
+- **统一数据目录**：配置、日志、规则、技能、知识索引、MCP 配置统一写入 `ANSYS_DATA_DIR`
 
 ## 完整仿真流水线
 
@@ -120,7 +120,7 @@ ansys-agent --version
 
 - `/help`：显示功能帮助
 - `/config`：配置 LLM 提供商、API Key 和模型
-- `/roles`：管理用户自定义角色（最多 5 个，每个最多 200 行）
+- `/rules`：管理用户自定义规则（最多 5 个，每个最多 200 行）
 - `/skills`：管理技能（查看内置/用户技能，添加、删除用户自定义技能）
 - `/memory`：查看持久记忆索引和已保存条目
 - `/mcp`：管理 MCP Server（查看已注册工具、添加/删除 server 配置）
@@ -236,8 +236,8 @@ ansys-agent                  # 重启后自动重建
 
 ### Role
 
-- 通过 `/roles` 交互式管理角色
-- 角色文件保存在 `ANSYS_DATA_DIR/roles/`
+- 通过 `/rules` 交互式管理规则
+- 规则文件保存在 `ANSYS_DATA_DIR/rules/`
 - 每次对话前会动态注入到 system prompt
 
 ### Skill
@@ -270,7 +270,7 @@ build.bat
 | `ANSYS_DATA_DIR/knowledge/official/` | 用户可在此放置额外的官方文档 |
 | `ANSYS_DATA_DIR/knowledge/internal/` | 用户自定义经验文档、内部知识 |
 | `ANSYS_DATA_DIR/skills/` | 用户自定义技能目录 |
-| `ANSYS_DATA_DIR/roles/` | 用户自定义角色目录 |
+| `ANSYS_DATA_DIR/rules/` | 用户自定义规则目录 |
 | `ANSYS_DATA_DIR/.env` | 用户覆盖的 LLM 配置 |
 
 添加新文件后，删除 `ANSYS_DATA_DIR/.rag/keyword_index.json` 并重启 agent 即可触发重建，内置知识与自定义知识将同时生效。

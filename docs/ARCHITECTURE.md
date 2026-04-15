@@ -109,7 +109,7 @@ Agent 启动时自动索引 `docs/api/`（API 速查表）和 `knowledge/`（官
 ### Skill / Role / MCP 扩展机制
 
 - **Skill**：`skills/*/SKILL.md` 中定义专业工作流，Agent 按需通过 `use_skill` 加载全文指导执行
-- **Role**：`~/.AnsysAgent/roles/` 中自定义系统角色，每轮对话前动态注入 system prompt
+- **Role**：`~/.AnsysAgent/rules/` 中自定义系统规则，每轮对话前动态注入 system prompt
 - **MCP**：`mcp_servers.json` 配置外部 MCP Server，工具自动注册，运行时可扩展额外能力
 
 ---
@@ -120,9 +120,9 @@ Agent 启动时自动索引 `docs/api/`（API 速查表）和 `knowledge/`（官
 
 - 使用 Rich 库提供彩色交互式 CLI
 - 解析命令行参数（`-p` 单次执行、`--version`）
-- 处理内置命令：`/help` `/config` `/roles` `/skills` `/mcp` `/exit`
+- 处理内置命令：`/help` `/config` `/rules` `/skills` `/mcp` `/exit`
 - 启动日志查看 HTTP server（守护线程，端口 7788）
-- 管理向导：角色（`RoleManager`）、技能（`SkillManager`）、MCP（`MCPManager`）
+- 管理向导：规则（`RoleManager`）、技能（`SkillManager`）、MCP（`MCPManager`）
 
 ### 2. ChatAgent（`agent/chat_agent.py`）
 
@@ -261,7 +261,7 @@ search_index(query, top_k=4)     # BM25-like 关键词匹配
 | 日志 | `agent/logger.py` | 按天轮转写入 `ANSYS_DATA_DIR/logs/`，保留 30 天 |
 | 日志查看 | `agent/log_server.py` | 后台 HTTP server，`http://localhost:7788` |
 | 数据目录 | `agent/paths.py` | 统一 `ANSYS_DATA_DIR`（`~/.AnsysAgent` 或 `ANSYS_AGENT_HOME`）|
-| 角色管理 | `agent/role_manager.py` | 加载 `roles/*.md`，每轮对话动态注入 system prompt |
+| 规则管理 | `agent/role_manager.py` | 加载 `roles/*.md`，每轮对话动态注入 system prompt |
 | 技能管理 | `agent/skill_manager.py` | 扫描 `skills/*/SKILL.md`，按需加载全文供 LLM 使用 |
 | MCP 管理 | `agent/mcp_manager.py` | 读取 `mcp_servers.json`，热注册 MCP 工具到工具注册表 |
 

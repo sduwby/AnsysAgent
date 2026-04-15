@@ -14,6 +14,7 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from itertools import count
 
 
 @dataclass
@@ -157,7 +158,7 @@ class ToolLoopNode(OmAgentNode):
         llm_invoke: Callable[[OmAgentContext], Any],
         tool_invoke: Callable[[str, dict[str, Any], OmAgentContext], str],
         *,
-        max_turns: int = 30,
+        max_turns: int | None = None,
         on_assistant_message: Callable[[dict[str, Any], OmAgentContext], None] | None = None,
         before_tool: Callable[[str, dict[str, Any], OmAgentContext], None] | None = None,
         after_tool: Callable[[str, dict[str, Any], str, OmAgentContext], None] | None = None,
@@ -174,7 +175,8 @@ class ToolLoopNode(OmAgentNode):
         self._step_recorder = step_recorder
 
     def run(self, context: OmAgentContext) -> None:
-        for _turn in range(self._max_turns):
+        turns = range(self._max_turns) if self._max_turns is not None else count()
+        for _turn in turns:
             response = self._llm_invoke(context)
             msg = response.choices[0].message
             msg_dict = _dump_message(msg)
@@ -213,7 +215,8 @@ class ToolLoopNode(OmAgentNode):
                 if self._after_tool:
                     self._after_tool(tool_name, tool_args, result, context)
 
-        context.error = f"工作流超过最大轮次 ({self._max_turns})"
+        if self._max_turns is not None:
+            context.error = f"工作流超过最大轮次 ({self._max_turns})"
 
 
 class StreamingToolLoopNode(OmAgentNode):
@@ -230,7 +233,7 @@ class StreamingToolLoopNode(OmAgentNode):
         llm_stream_invoke: Callable[[OmAgentContext], Any],
         tool_invoke: Callable[[str, dict[str, Any], OmAgentContext], str],
         *,
-        max_turns: int = 30,
+        max_turns: int | None = None,
         on_assistant_message: Callable[[dict[str, Any], OmAgentContext], None] | None = None,
         before_tool: Callable[[str, dict[str, Any], OmAgentContext], str | None] | None = None,
         after_tool: Callable[[str, dict[str, Any], str, OmAgentContext], str | None] | None = None,
@@ -247,7 +250,8 @@ class StreamingToolLoopNode(OmAgentNode):
             pass
 
     def stream(self, context: OmAgentContext):
-        for _turn in range(self._max_turns):
+        turns = range(self._max_turns) if self._max_turns is not None else count()
+        for _turn in turns:
             stream = self._llm_stream_invoke(context)
             full_content = ""
             tool_calls_acc: dict[int, dict[str, str]] = {}
@@ -329,4 +333,5 @@ class StreamingToolLoopNode(OmAgentNode):
                     if after_payload:
                         yield after_payload
 
-        context.error = f"工作流超过最大轮次 ({self._max_turns})"
+        if self._max_turns is not None:
+            context.error = f"工作流超过最大轮次 ({self._max_turns})"
