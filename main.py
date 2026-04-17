@@ -25,6 +25,7 @@ except ImportError:
 from agent.commands import command_registry, CommandContext, DispatchResult
 from agent.config_manager import run_config_wizard, set_thinking_enabled, model_supports_thinking
 from agent.logger import setup_logging, get_logger
+from agent.pet import get_pet, maybe_greet_on_startup, stage_up_quote, secret_unlock_animation
 from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
 from agent.terminal_renderer import AssistantStreamRenderer
 
@@ -603,7 +604,12 @@ def _show_help(console: Console) -> None:
         "  [dim]/mcp[/dim]            → 管理 MCP server（查看状态 / 启用 / 禁用工具）\n"
         "  [dim]/exit  /quit[/dim]   → 退出程序（也可按 Ctrl+C）\n"
         "  [dim]/coffee[/dim]        → ☕ 彩蛋\n"
-        "  [dim]/motor[/dim]         → ⚡ 彩蛋",
+        "  [dim]/motor[/dim]         → ⚡ 彩蛋\n"
+        "  [dim]/pet[/dim]           → 🐾 召唤你的仿真宠物（显示完整形象与状态）\n"
+        "  [dim]/pet feed[/dim]      → 🍜 喂食宠物\n"
+        "  [dim]/pet pat[/dim]       → 💛 摸摸宠物\n"
+        "  [dim]/pet talk[/dim]      → 💬 与宠物对话（输入 /q 退出）\n"
+        "  [dim]/pet rename <名>[/dim] → ✏️  给宠物改名",
         title="其他命令",
         border_style="dim",
         padding=(0, 2),
@@ -700,8 +706,9 @@ def _stream_response(agent, user_input: str) -> str:
         text_renderer.finalize()
     if in_thinking:
         console.print()
-    if in_text or assistant_prefix_printed:
-        console.print()  # 最后换行
+    if assistant_prefix_printed and not in_text:
+        # 只有前缀被打出、但没有任何文本 token（纯工具调用场景）才补换行
+        console.print()
 
     return text_buf
 
@@ -728,6 +735,227 @@ def _handle_motor(ctx: CommandContext) -> str:
     ctx.console.print("[bold cyan]这就是你在仿真的东西，加油！💪[/bold cyan]")
     return DispatchResult.HANDLED
 
+
+def _run_pet_talk(console: Console, agent_ref, pet) -> None:
+    """进入宠物对话子循环，直到用户说再见或 /q 退出。"""
+    import sys as _sys
+    from agent.pet_agent import PetAgent
+
+    pet_agent = PetAgent(
+        client=agent_ref.client,
+        model=agent_ref.model,
+        fallback_clients=agent_ref._fallback_clients,
+        call_with_fallback=agent_ref._call_with_fallback,
+    )
+
+    _, title = pet.stage
+    console.print(Panel(
+        f"{chr(10).join('  ' + l for l in pet.sprite.splitlines())}\n\n"
+        f"  [bold]{pet.name}[/bold] 来陪你聊天啦！(・ω・)\n"
+        f"  [dim]输入消息开始对话，输入 /q 或说「再见」退出[/dim]",
+        title=f"💬 与 {pet.name} 对话",
+        border_style="magenta",
+        padding=(0, 2),
+    ))
+
+    try:
+        if _PTK_AVAILABLE:
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.formatted_text import HTML
+            ptk = PromptSession()
+        else:
+            ptk = None
+    except Exception:
+        ptk = None
+
+    while True:
+        # ── 读取用户输入 ──────────────────────────────────────────────
+        try:
+            if ptk is not None:
+                user_input = ptk.prompt(
+                    HTML(f"\n<ansiyellow><b>你</b></ansiyellow>&gt; ")
+                ).strip()
+            else:
+                console.print(f"\n[bold yellow]你[/bold yellow]> ", end="")
+                user_input = _sys.stdin.readline().strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print(f"\n[dim]{pet.name}：下次再来陪我玩哦 (・ω・)[/dim]")
+            break
+
+        if not user_input:
+            continue
+
+        if user_input.strip().lower() in ("/q", "/quit", "/exit"):
+            console.print(f"[dim]{pet.name}：拜拜～主人要记得回来哦！(≧∇≦)/[/dim]")
+            break
+
+        # ── 流式输出宠物回复（逐 token 打字机效果）────────────────────
+        # 打出宠物名前缀后立即 flush，确保用户能看到"谁在说话"
+        console.print(f"\n[bold magenta]{pet.name}[/bold magenta]> ", end="")
+        _sys.stdout.flush()
+
+        text_buf = ""
+        farewell_detected = False
+
+        try:
+            for chunk in pet_agent.chat_stream(pet, user_input):
+                if chunk.startswith("\x00TOOL\x00"):
+                    # 工具调用：换行后显示"翻记忆本"提示
+                    _sys.stdout.write("\n")
+                    _sys.stdout.flush()
+                    tool_name = chunk[len("\x00TOOL\x00"):].split(":", 1)[0]
+                    console.print(
+                        f"[dim]🔍 {pet.name} 翻了翻记忆本：[bold]{tool_name}[/bold][/dim]"
+                    )
+                elif chunk.startswith("\x00TOOL_RESULT\x00"):
+                    result_info = chunk[len("\x00TOOL_RESULT\x00"):]
+                    color = "green" if result_info.startswith("✓") else "red"
+                    console.print(f"[{color} dim]  {result_info}[/{color} dim]")
+                    # 工具结束后重新打宠物前缀，继续流式输出后续文字
+                    console.print(f"\n[bold magenta]{pet.name}[/bold magenta]> ", end="")
+                    _sys.stdout.flush()
+                else:
+                    # 普通文本 token：直接写入 stdout，逐字符打字机效果
+                    text_buf += chunk
+                    _sys.stdout.write(chunk)
+                    _sys.stdout.flush()
+
+            _sys.stdout.write("\n")
+            _sys.stdout.flush()
+
+        except KeyboardInterrupt:
+            _sys.stdout.write("\n")
+            _sys.stdout.flush()
+            console.print(f"[yellow]（已中断）[/yellow]")
+            continue
+        except Exception as e:
+            _sys.stdout.write("\n")
+            _sys.stdout.flush()
+            _log.error("宠物对话异常: %s", e, exc_info=True)
+            console.print(f"[red]（{pet.name} 好像出了点问题：{e}）[/red]")
+            continue
+
+        # 宠物说了再见则自动退出循环
+        if "再见" in text_buf or "拜拜" in text_buf:
+            farewell_detected = True
+
+        if farewell_detected:
+            break
+
+
+def _handle_pet(ctx: CommandContext) -> str:
+    """宠物系统命令处理。
+
+    /pet              — 召唤宠物（显示完整形象 + 状态）
+    /pet feed         — 喂食
+    /pet pat          — 摸摸
+    /pet rename <名>  — 重命名
+    /pet talk         — 进入与宠物的对话模式
+    /pet status       — 纯文字状态（与 /pet 相同）
+    """
+    pet = get_pet()
+    raw_args = (ctx.args or "").strip()
+    parts = raw_args.split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    sub_arg = parts[1] if len(parts) > 1 else ""
+
+    if sub in ("feed", "喂食", "喂"):
+        sprite, msg = pet.feed()
+        ctx.console.print(Panel(
+            pet.build_action_panel(sprite, msg),
+            title=f"🍜 喂食 {pet.name}",
+            border_style="green",
+            padding=(0, 2),
+        ))
+
+    elif sub in ("pat", "摸", "摸摸", "抚摸"):
+        sprite, msg = pet.pat()
+        ctx.console.print(Panel(
+            pet.build_action_panel(sprite, msg),
+            title=f"💛 摸摸 {pet.name}",
+            border_style="magenta",
+            padding=(0, 2),
+        ))
+
+    elif sub in ("rename", "改名", "重命名"):
+        if not sub_arg:
+            ctx.console.print("[yellow]用法：/pet rename <新名字>[/yellow]")
+        else:
+            ok, msg = pet.rename(sub_arg)
+            if ok:
+                ctx.console.print(Panel(
+                    pet.build_action_panel(pet.sprite, f"  ✨ {msg}"),
+                    title=f"🐾 {pet.name}",
+                    border_style="cyan",
+                    padding=(0, 2),
+                ))
+            else:
+                ctx.console.print(f"[red]{msg}[/red]")
+
+    elif sub in ("talk", "聊天", "对话", "说话"):
+        _run_pet_talk(ctx.console, ctx.agent, pet)
+
+    elif sub in ("", "status", "状态", "召唤"):
+        # 主命令：生成完整宠物卡片
+        _, title = pet.stage
+        ctx.console.print(Panel(
+            pet.build_panel_content(),
+            title=f"🐾  {pet.name}  ·  {title}",
+            border_style="magenta",
+            padding=(0, 2),
+        ))
+
+    else:
+        ctx.console.print(
+            "[yellow]用法：/pet | /pet feed | /pet pat | /pet rename <名字> | /pet talk[/yellow]"
+        )
+
+    return DispatchResult.HANDLED
+
+
+def _handle_bugpet(ctx: CommandContext) -> str:
+    """隐藏命令：将宠物升级为「量子 Maxwell」形态。不在帮助/补全中显示。"""
+    import time
+    pet = get_pet()
+
+    already = not pet.unlock_secret()
+
+    if already:
+        # 已经是隐藏形态，直接展示
+        _, title_str = pet.stage
+        ctx.console.print(Panel(
+            pet.build_panel_content(),
+            title=f"⚛  {pet.name}  ·  量子 Maxwell 形态",
+            border_style="bright_cyan",
+            padding=(0, 2),
+        ))
+        ctx.console.print(
+            "[dim bright_cyan]  （已处于量子 Maxwell 形态）[/dim bright_cyan]"
+        )
+        return DispatchResult.HANDLED
+
+    # 首次解锁：播放动画
+    for line in secret_unlock_animation():
+        ctx.console.print(line)
+        time.sleep(0.18)
+
+    # 展示新形象
+    sprite_block = "\n".join("  " + l for l in pet.sprite.splitlines())
+    ctx.console.print(Panel(
+        f"{sprite_block}\n"
+        f"\n"
+        f"  [bold]{pet.name}[/bold] 已进化为 [bold bright_cyan]量子 Maxwell 形态[/bold bright_cyan]！\n"
+        f"\n"
+        f"  ⚛  饱食度与心情已恢复满值\n"
+        f"  🔬 麦克斯韦方程组已刻入灵魂\n"
+        f"  ✦  这是一个不会在帮助里出现的秘密……\n"
+        f"\n"
+        f"  💬 [italic bright_cyan]{pet.random_quote()}[/italic bright_cyan]",
+        title="⚛  !! 隐藏形象解锁 !!  ⚛",
+        border_style="bright_cyan",
+        padding=(0, 2),
+    ))
+    return DispatchResult.HANDLED
 
 def _handle_help(ctx: CommandContext) -> str:
     _show_help(ctx.console)
@@ -984,6 +1212,18 @@ def _register_commands(agent) -> None:
     r.register("/history", "查看最近对话记录（可指定条数）",     _make_history_handler(agent))
     r.register("/coffee",  "☕ 彩蛋",                           _handle_coffee)
     r.register("/motor",   "⚡ 彩蛋",                           _handle_motor)
+    r.register("/pet",     "🐾 查看/喂食/摸摸你的仿真宠物安安", _handle_pet)
+    r.register("/bugpet",  "",                                   _handle_bugpet)
+
+    # 子命令 / 带参数用法的补全提示（不参与路由，仅出现在补全菜单）
+    r.register_hint("/thinking on",      "开启 thinking / reasoning 模式")
+    r.register_hint("/thinking off",     "关闭 thinking / reasoning 模式")
+    r.register_hint("/thinking status",  "查看 thinking 当前状态")
+    r.register_hint("/history 10",       "查看最近 10 条对话记录")
+    r.register_hint("/pet feed",         "🍜 喂食宠物")
+    r.register_hint("/pet pat",          "💛 摸摸宠物")
+    r.register_hint("/pet talk",         "💬 与宠物对话")
+    r.register_hint("/pet rename",       "✏️  给宠物改名")
 
 
 @click.command()
@@ -1019,6 +1259,7 @@ def cli(prompt: str | None):
         _log.info("进入交互模式")
         console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
         _maybe_show_startup_egg()
+        maybe_greet_on_startup(console)
 
         # 初始化 prompt_toolkit 会话（支持 /命令自动补全）
         ptk_session = _make_prompt_session()
@@ -1065,6 +1306,29 @@ def cli(prompt: str | None):
             try:
                 reply = _stream_response(agent, user_input)
                 _log.info("Agent 回复: %s", reply[:500] + ("..." if len(reply) > 500 else ""))
+                # 宠物成长：每次成功 LLM 对话都算一次互动经验
+                _sim_keywords = ("仿真", "maxwell", "simulate", "mesh", "网格",
+                                 "转矩", "电机", "分析", "solve", "求解", "fluent",
+                                 "mapdl", "icepak", "motor", "结果", "导出")
+                if any(kw in user_input.lower() or kw in reply.lower()
+                       for kw in _sim_keywords):
+                    pet = get_pet()
+                    new_stage_key = pet.record_sim()
+                    if new_stage_key:
+                        stage_name, title = pet.stage
+                        quote = stage_up_quote(new_stage_key)
+                        sprite_block = "\n".join(
+                            "  " + l for l in pet.sprite.splitlines()
+                        )
+                        console.print(Panel(
+                            f"{sprite_block}\n\n"
+                            f"  🎉 [bold]{pet.name}[/bold] 进化到了 [cyan]{stage_name}[/cyan]！\n"
+                            f"  🏅 称号解锁：[bold yellow]{title}[/bold yellow]\n\n"
+                            f"  💬 [italic yellow]{quote}[/italic yellow]",
+                            title="🐾 宠物成长！",
+                            border_style="bright_magenta",
+                            padding=(0, 2),
+                        ))
             except KeyboardInterrupt:
                 console.print("\n[yellow]已中断。[/yellow]")
                 _log.warning("用户中断了当前请求")

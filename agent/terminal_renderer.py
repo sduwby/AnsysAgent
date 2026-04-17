@@ -102,29 +102,84 @@ def render_markdown_block(block: str):
 # Streaming renderer
 # ---------------------------------------------------------------------------
 
+# 行内 Markdown 特征：含这些标记的行在行完成后需要擦除重渲
+_INLINE_MD_RE = re.compile(r"\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|^#{1,6}\s|^[-*+]\s|^\d+\.\s|^>\s", re.MULTILINE)
+
+# 表格分隔行
+_TABLE_SEP_LINE_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$")
+
+
+def _display_width(s: str) -> int:
+    """计算字符串终端显示宽度（宽字符占 2 列）。"""
+    w = 0
+    for ch in s:
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def _terminal_line_count(text: str) -> int:
+    """计算文本在终端实际占用的行数（含折行）。"""
+    cols = shutil.get_terminal_size(fallback=(80, 24)).columns or 80
+    total = 0
+    for line in text.split("\n"):
+        w = _display_width(line)
+        total += max(1, (w + cols - 1) // cols)
+    return total
+
+
+def _erase_lines(n: int) -> None:
+    """擦除光标所在行及上方共 n 行。"""
+    if n <= 0:
+        return
+    sys.stdout.write("\r\033[K")
+    for _ in range(n - 1):
+        sys.stdout.write("\033[A\033[K")
+    sys.stdout.flush()
+
+
 class AssistantStreamRenderer:
     """
-    流式 Markdown 渲染器。
+    流式 Markdown 渲染器——行级实时渲染策略：
 
-    策略：
-    - 以"段落边界"为单位渲染——每当一个完整块（普通段落、代码块、表格）就绪时
-      立即调用 Rich 渲染并输出，无需等待全文结束。
-    - 对"需要完整内容才能渲染"的特殊块（代码块、表格），在等待期间先将原文本以
-      纯文本形式输出到屏幕；一旦块完整，擦除这部分纯文本输出，再做结构化渲染。
-    - 普通段落（Markdown 文本）：积累整个段落（空行分隔），段落完成后一次性用
-      Rich Markdown 渲染，避免残缺片段。
-    - 换行符之前保留在缓冲区，直到真正出现新行，确保每次渲染都是完整的行单位。
+    普通文本行
+      - token 到达时立即 write stdout（打字机效果）
+      - 行结束（\\n）时：若该行含 Markdown 标记（加粗/斜体/标题/列表等），
+        擦除该行原始文字，用 Rich Markdown 重新渲染；否则保持原样
+
+    代码块（``` ... ```）
+      - 进入代码块后 token 继续逐字写 stdout（用户实时看到代码）
+      - 遇到闭合 ``` 时：擦除整个代码块的原始文字，用 Rich Panel 重新渲染
+
+    表格（| header | ... \\n |---|--- 行）
+      - 检测到表格分隔行后，停止向 stdout 写入，转为纯缓冲
+      - 表格结束（空行或非表格行）时，用 Rich Table 渲染
+
+    这样做到：流式阶段每个字符立即可见，完整块就绪时原位替换为格式化渲染。
     """
+
+    # 渲染器状态
+    _STATE_NORMAL   = "normal"    # 普通文本
+    _STATE_CODE     = "code"      # 代码块内部
+    _STATE_TABLE    = "table"     # 表格缓冲
 
     def __init__(self, console: Console):
         self.console = console
-        self._text = ""           # 全部已接收文本
-        self._rendered_pos = 0    # _text 中已完成渲染的字节位置（"已消费"边界）
+        self._full_text = ""          # 完整接收文本（仅用于 text 属性）
 
-        # 对于正在等待完整结束的 fenced block / table，记录其开始在 _text 中的位置
-        # 以及已输出到终端的纯文本字符数（用于 erase）。
-        self._pending_raw_start: int | None = None   # 该特殊块在 _text 中的起始 index
-        self._pending_raw_lines: int = 0             # 已向终端输出的该块的行数
+        self._state = self._STATE_NORMAL
+
+        # 当前行缓冲（行内字符，不含 \n）
+        self._cur_line = ""
+        # 当前行已向 stdout 写入的字符数（用于行级擦除）
+        self._cur_line_written = 0
+
+        # 代码块状态
+        self._code_lang = ""          # 语言标识
+        self._code_body_lines: list[str] = []  # 已完成的代码行
+        self._code_raw_lines = 0      # 已写入 stdout 的代码块行数（含 ``` 行）
+
+        # 表格状态
+        self._table_lines: list[str] = []  # 已收集的表格行（含 header）
 
     # ------------------------------------------------------------------
     # Public API
@@ -133,203 +188,254 @@ class AssistantStreamRenderer:
     def append_text(self, chunk: str) -> None:
         if not chunk:
             return
-        self._text += chunk
-        self._try_flush()
+        self._full_text += chunk
+        for ch in chunk:
+            self._feed_char(ch)
 
     def finalize(self) -> str:
-        """流结束，渲染剩余所有内容。"""
-        remainder = self._text[self._rendered_pos:]
-        if not remainder.strip():
-            # 仅有空白：输出换行占位
-            if remainder:
-                self.console.print("", end="", highlight=False, markup=False)
-            return self._text
+        """流结束，处理所有未完成的缓冲内容。"""
+        if self._state == self._STATE_CODE:
+            # 代码块未闭合：擦除原始输出，按普通代码块渲染
+            self._flush_code_block(closed=False)
+        elif self._state == self._STATE_TABLE:
+            # 表格未结束：直接渲染已收集的行
+            self._flush_table()
+        else:
+            # 普通行：处理最后一行（无 \n 结尾的尾部）
+            self._flush_cur_line(eol=False)
 
-        # 如果有悬空的 pending raw 输出，先擦除
-        if self._pending_raw_start is not None:
-            self._erase_pending_raw()
-            self._pending_raw_start = None
-            self._pending_raw_lines = 0
-
-        # 渲染剩余全部块
-        blocks = split_markdown_blocks(remainder)
-        for block in blocks:
-            renderable = render_markdown_block(block)
-            self.console.print(renderable)
-
-        self._rendered_pos = len(self._text)
-        return self._text
+        return self._full_text
 
     @property
     def text(self) -> str:
-        return self._text
+        return self._full_text
 
     # ------------------------------------------------------------------
-    # Internal flush logic
+    # 核心字符状态机
     # ------------------------------------------------------------------
 
-    def _try_flush(self) -> None:
-        """
-        检查从 _rendered_pos 开始的未渲染内容，将能确认完整的块渲染输出。
-        """
-        while True:
-            pending = self._text[self._rendered_pos:]
-            if not pending:
-                break
+    def _feed_char(self, ch: str) -> None:
+        if ch == "\n":
+            self._on_newline()
+        else:
+            self._on_char(ch)
 
-            # 找到下一个完整块
-            result = self._next_complete_block(pending)
-            if result is None:
-                # 没有完整块可渲染——但如果正处于特殊块等待中，把新到的行作为纯文本输出
-                self._stream_pending_raw_tail()
-                break
+    def _on_char(self, ch: str) -> None:
+        """处理非换行字符。"""
+        self._cur_line += ch
 
-            block, consumed = result
-
-            # 如果此前有 pending raw 输出（等待完整时的纯文本），先擦除
-            if self._pending_raw_start is not None:
-                self._erase_pending_raw()
-                self._pending_raw_start = None
-                self._pending_raw_lines = 0
-
-            renderable = render_markdown_block(block)
-            self.console.print(renderable)
-            self._rendered_pos += consumed
-
-    def _next_complete_block(self, text: str) -> tuple[str, int] | None:
-        """
-        从 text 开头找到第一个「完整块」，返回 (block_str, consumed_chars)。
-        若不存在完整块则返回 None。
-
-        完整块定义：
-        - 普通段落：以空行结束（即段落后有 \n\n 或文本结束后有换行且后面有空行）
-        - fenced 代码块：有开闭 ``` 对
-        - Markdown 表格：表格所有行已完整（后面有空行或遇到非表格行）
-        """
-        text = text.replace("\r\n", "\n")
-
-        # 跳过开头的空行（空行本身不构成块，直接消费掉）
-        stripped_start = len(text) - len(text.lstrip("\n"))
-        if stripped_start > 0:
-            self._rendered_pos += stripped_start
-            text = text[stripped_start:]
-            if not text:
-                return None
-
-        lines = text.split("\n")
-
-        # ── fenced 代码块 ────────────────────────────────────────────
-        if lines[0].lstrip().startswith("```"):
-            # 查找结束的 ```
-            end_idx = None
-            for i in range(1, len(lines)):
-                if lines[i].lstrip().startswith("```"):
-                    end_idx = i
-                    break
-            if end_idx is None:
-                # 块未闭合 → 标记为 pending raw
-                if self._pending_raw_start is None:
-                    self._pending_raw_start = self._rendered_pos
-                return None
-            # 找到完整的 fenced block
-            block_lines = lines[: end_idx + 1]
-            block = "\n".join(block_lines)
-            # consumed = block 本身的字符数 + 后面的空行
-            consumed = len(block)
-            # 消费掉紧随其后的换行
-            rest = text[consumed:]
-            extra = len(rest) - len(rest.lstrip("\n"))
-            consumed += extra
-            return block.strip(), consumed
-
-        # ── Markdown 表格 ─────────────────────────────────────────────
-        if len(lines) >= 2 and _looks_like_table_start(lines[0], lines[1]):
-            # 收集所有连续的表格行
-            end_idx = 2
-            while end_idx < len(lines) and lines[end_idx].strip() and "|" in lines[end_idx]:
-                end_idx += 1
-            # 判断表格是否"完整"：后面出现了空行或文本已结束但有至少一行数据行
-            table_complete = (
-                end_idx < len(lines) and not lines[end_idx].strip()
-            ) or (
-                # 只有 header + separator，没有数据行，仍当作完整
-                end_idx == len(lines) and not text.endswith("\n|")
-            )
-            if not table_complete and end_idx == len(lines):
-                # 还没有终止行 → 可能表格还未输完
-                if self._pending_raw_start is None:
-                    self._pending_raw_start = self._rendered_pos
-                return None
-            block_lines = lines[:end_idx]
-            block = "\n".join(block_lines)
-            consumed = len(block)
-            rest = text[consumed:]
-            extra = len(rest) - len(rest.lstrip("\n"))
-            consumed += extra
-            return block.strip(), consumed
-
-        # ── 普通段落（空行分隔）────────────────────────────────────────
-        # 找到第一个空行（连续两个 \n\n）
-        double_newline = text.find("\n\n")
-        if double_newline == -1:
-            # 还没有段落结束符：不渲染
-            return None
-        # 段落内容
-        para = text[:double_newline].strip()
-        if not para:
-            # 全是空白 → 消费掉
-            consumed = double_newline + 2
-            self._rendered_pos += consumed
-            return self._next_complete_block(self._text[self._rendered_pos:])
-        consumed = double_newline + 2
-        return para, consumed
-
-    def _stream_pending_raw_tail(self) -> None:
-        """
-        当处于「等待特殊块完整」的过程中，把新到的、尚未输出的行以纯文本输出到终端。
-        这样用户能实时看到正在流式生成的代码/表格内容。
-        """
-        if self._pending_raw_start is None:
+        if self._state == self._STATE_TABLE:
+            # 表格模式：不写 stdout，纯缓冲
             return
 
-        pending_text = self._text[self._pending_raw_start:]
-        pending_lines = pending_text.split("\n")
-
-        # 只输出已「稳定」的行（即不包括最后一行——它可能还在增长）
-        stable_lines = pending_lines[:-1]  # 最后一行可能未完整
-        already_output = self._pending_raw_lines
-
-        new_lines = stable_lines[already_output:]
-        if not new_lines:
-            return
-
-        for line in new_lines:
-            self.console.print(line, end="\n", highlight=False, markup=False)
-        self._pending_raw_lines += len(new_lines)
-
-    def _count_lines_on_terminal(self, text: str) -> int:
-        """计算文本在终端上实际占用的行数（考虑折行）。"""
-        cols = shutil.get_terminal_size(fallback=(80, 24)).columns or 80
-        total = 0
-        for line in text.split("\n"):
-            total += max(1, (len(line) + cols - 1) // cols)
-        return total
-
-    def _erase_pending_raw(self) -> None:
-        """擦除已输出的 pending raw 行，为结构化渲染腾出空间。"""
-        if self._pending_raw_lines == 0:
-            return
-        # 取已输出的原始文本
-        pending_text = self._text[self._pending_raw_start:]
-        pending_lines = pending_text.split("\n")
-        output_text = "\n".join(pending_lines[: self._pending_raw_lines])
-
-        n = self._count_lines_on_terminal(output_text)
-        # 移动到已输出块的起始行并清除
-        sys.stdout.write("\r\033[K")
-        for _ in range(n - 1):
-            sys.stdout.write("\033[A\033[K")
+        # 代码块或普通模式：立即写 stdout（打字机效果）
+        sys.stdout.write(ch)
         sys.stdout.flush()
+        self._cur_line_written += 1
+
+    def _on_newline(self) -> None:
+        """处理换行符——行完成，触发行级渲染决策。"""
+        line = self._cur_line
+        self._cur_line = ""
+        self._cur_line_written = 0
+
+        if self._state == self._STATE_NORMAL:
+            # 先检查上一行是否是表格候选（当前行可能是分隔行）
+            if hasattr(self, "_table_candidate"):
+                if self._maybe_enter_table(line):
+                    return   # 已进入表格模式，当前行已被收入表格缓冲
+                # 不是表格分隔行，继续按普通行处理当前行
+            self._handle_normal_line(line)
+        elif self._state == self._STATE_CODE:
+            self._handle_code_line(line)
+        elif self._state == self._STATE_TABLE:
+            self._handle_table_line(line)
+
+    # ------------------------------------------------------------------
+    # 普通模式行处理
+    # ------------------------------------------------------------------
+
+    def _handle_normal_line(self, line: str) -> None:
+        """普通行完成，决定是保持原样还是擦除重渲。"""
+        # 检测是否进入代码块
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            lang = stripped[3:].strip().lower()
+            self._state = self._STATE_CODE
+            self._code_lang = lang
+            self._code_body_lines = []
+            # 代码块起始行已经写入了 stdout，记录行数
+            self._code_raw_lines = 1
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return
+
+        # 检测是否进入表格（当前行是表头，等待下一行判断）
+        # 表格由 "header行\n分隔行" 组合触发，先将表头暂存
+        if "|" in line:
+            # 可能是表格表头，先写 stdout，等下一行判断
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            # 暂存为"待确认的表格候选行"
+            self._table_candidate = line
+            self._table_candidate_written = True
+            return
+
+        # 清除上一次的表格候选（下一行不是分隔行）
+        if hasattr(self, "_table_candidate"):
+            del self._table_candidate
+
+        # 普通行：重渲决策
+        self._render_normal_line(line)
+
+    def _render_normal_line(self, line: str) -> None:
+        """对已完成的普通行进行渲染（含行内 Markdown 检测）。"""
+        has_inline_md = bool(_INLINE_MD_RE.search(line))
+
+        if has_inline_md and line.strip():
+            # 擦除已写入的原始行，用 Rich 渲染
+            written_chars = _display_width(line)
+            cols = shutil.get_terminal_size(fallback=(80, 24)).columns or 80
+            raw_lines = max(1, (written_chars + cols - 1) // cols)
+            _erase_lines(raw_lines)
+            self.console.print(Markdown(line))
+        else:
+            # 无 Markdown：保持原样，只补换行
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    # ------------------------------------------------------------------
+    # 表格候选行 → 表格模式切换
+    # ------------------------------------------------------------------
+
+    def _maybe_enter_table(self, line: str) -> bool:
+        """
+        检查当前行是否是表格分隔行。
+        若是，进入表格模式并把候选表头和分隔行一起收入缓冲。
+        返回 True 表示已进入表格模式。
+        """
+        if not hasattr(self, "_table_candidate"):
+            return False
+        candidate = self._table_candidate
+        del self._table_candidate
+
+        if _TABLE_SEP_LINE_RE.match(line.strip()):
+            # 确认是表格，擦除已写入的表头行
+            if getattr(self, "_table_candidate_written", False):
+                # 表头已写入 stdout：擦除它（1 行）
+                cols = shutil.get_terminal_size(fallback=(80, 24)).columns or 80
+                w = _display_width(candidate)
+                n = max(1, (w + cols - 1) // cols)
+                _erase_lines(n)
+            self._state = self._STATE_TABLE
+            self._table_lines = [candidate, line]
+            if hasattr(self, "_table_candidate_written"):
+                del self._table_candidate_written
+            return True
+        else:
+            # 不是表格，表头已经写入 stdout，只需渲染它
+            if hasattr(self, "_table_candidate_written"):
+                del self._table_candidate_written
+            # 普通行渲染（已有 \n，不再补写）
+            # 不需要额外操作，表头已经原样显示
+            return False
+
+    # ------------------------------------------------------------------
+    # 代码块行处理
+    # ------------------------------------------------------------------
+
+    def _handle_code_line(self, line: str) -> None:
+        """代码块内的行完成。"""
+        if line.lstrip().startswith("```"):
+            # 代码块闭合
+            self._code_raw_lines += 1  # 闭合行也写了
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._flush_code_block(closed=True)
+        else:
+            self._code_body_lines.append(line)
+            self._code_raw_lines += 1
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    def _flush_code_block(self, closed: bool) -> None:
+        """擦除代码块的原始输出，用 Rich Panel 重渲。"""
+        body = "\n".join(self._code_body_lines)
+        lang = self._code_lang
+
+        # 构建完整代码块字符串用于 _render_fenced_block
+        fence = f"```{lang}\n{body}\n```" if body else f"```{lang}\n```"
+
+        # 擦除：_code_raw_lines 行（代码块内所有已写入的行）
+        _erase_lines(self._code_raw_lines)
+
+        renderable = _render_fenced_block(fence)
+        self.console.print(renderable)
+
+        # 重置代码块状态
+        self._state = self._STATE_NORMAL
+        self._code_lang = ""
+        self._code_body_lines = []
+        self._code_raw_lines = 0
+
+    # ------------------------------------------------------------------
+    # 表格行处理
+    # ------------------------------------------------------------------
+
+    def _handle_table_line(self, line: str) -> None:
+        """表格模式内的行完成。"""
+        stripped = line.strip()
+        # 空行或非表格行 → 表格结束
+        if not stripped or "|" not in stripped:
+            self._flush_table()
+            # 当前行按普通行处理
+            self._state = self._STATE_NORMAL
+            self._handle_normal_line(line)
+        else:
+            self._table_lines.append(line)
+
+    def _flush_table(self) -> None:
+        """渲染已缓冲的表格（表格在缓冲期间不写 stdout，无需擦除）。"""
+        if len(self._table_lines) < 2:
+            # 不完整，降级为纯文本输出
+            for l in self._table_lines:
+                sys.stdout.write(l + "\n")
+            sys.stdout.flush()
+        else:
+            block = "\n".join(self._table_lines)
+            self.console.print(_render_table(block))
+        self._table_lines = []
+        self._state = self._STATE_NORMAL
+
+    # ------------------------------------------------------------------
+    # 尾部处理（finalize 时当前行无 \n）
+    # ------------------------------------------------------------------
+
+    def _flush_cur_line(self, eol: bool = True) -> None:
+        """处理末尾未换行的当前行。"""
+        line = self._cur_line
+        if not line:
+            if eol:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            return
+
+        # 检查是否有待确认的表格候选（仅用于表格候选降级）
+        if hasattr(self, "_table_candidate"):
+            del self._table_candidate
+
+        has_inline_md = bool(_INLINE_MD_RE.search(line))
+        if has_inline_md and line.strip():
+            written = _display_width(line)
+            cols = shutil.get_terminal_size(fallback=(80, 24)).columns or 80
+            n = max(1, (written + cols - 1) // cols)
+            _erase_lines(n)
+            self.console.print(Markdown(line))
+        else:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        self._cur_line = ""
+        self._cur_line_written = 0
 
 
 # Backward-compatible alias for older imports/tests.

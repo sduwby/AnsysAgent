@@ -97,6 +97,8 @@ class CommandRegistry:
         self._map: dict[str, Command] = {}
         # 保留注册顺序，供 /help 按顺序展示
         self._ordered: list[Command] = []
+        # 仅用于补全提示的额外条目（子命令/带参数的用法），不参与 dispatch
+        self._hints: list[tuple[str, str]] = []
 
     # ------------------------------------------------------------------
     # 注册
@@ -148,9 +150,30 @@ class CommandRegistry:
     def slash_completion_list(self) -> list[tuple[str, str]]:
         """
         返回 [(命令名, 描述), ...] 供 prompt_toolkit 补全菜单使用。
-        主命令与别名均包含，按名称字母序排序。
+        主命令与别名均包含，额外的补全提示（hints）也一并合并，按名称字母序排序。
+        description 为空字符串的命令视为隐藏命令，不出现在补全列表中。
         """
-        return sorted((name, cmd.description) for name, cmd in self._map.items())
+        items = [
+            (name, cmd.description)
+            for name, cmd in self._map.items()
+            if cmd.description  # 空 description → 隐藏命令，跳过
+        ]
+        items.extend(self._hints)
+        return sorted(items)
+
+    def register_hint(self, completion: str, description: str) -> None:
+        """
+        注册一条仅用于补全菜单的提示条目（不参与命令路由）。
+
+        适用于子命令 / 带参数用法，例如：
+            register_hint("/pet feed", "喂食宠物")
+            register_hint("/thinking on", "开启 thinking 模式")
+
+        Args:
+            completion  补全后填入输入框的完整字符串（含 / 前缀）
+            description 补全菜单中显示的一句话描述
+        """
+        self._hints.append((completion.lower(), description))
 
     # ------------------------------------------------------------------
     # 分发
