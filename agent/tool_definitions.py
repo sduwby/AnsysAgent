@@ -327,12 +327,12 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "stator_outer_radius": {"type": "number", "description": "定子外径（mm）"},
                     "stator_inner_radius": {"type": "number", "description": "定子内径（mm）"},
-                    "rotor_outer_radius": {"type": "number", "description": "转子外径（mm）"},
-                    "rotor_inner_radius": {"type": "number", "description": "转子内径（mm）"},
+                    "rotor_outer_radius": {"type": "number", "description": "转子铁芯外径（mm，不含磁铁；磁铁贴在其外表面，需满足 rotor_outer_radius + magnet_thickness < stator_inner_radius）"},
+                    "rotor_inner_radius": {"type": "number", "description": "转子内径/轴孔半径（mm）"},
                     "num_slots": {"type": "integer", "description": "定子槽数"},
-                    "num_poles": {"type": "integer", "description": "极数"},
-                    "magnet_thickness": {"type": "number", "description": "永磁体厚度（mm）"},
-                    "stack_length": {"type": "number", "description": "轴向叠片长度（mm）"},
+                    "num_poles": {"type": "integer", "description": "极数（必须为偶数）"},
+                    "magnet_thickness": {"type": "number", "description": "表贴永磁体厚度（mm），必须 < stator_inner_radius - rotor_outer_radius"},
+                    "stack_length": {"type": "number", "description": "轴向叠片长度（mm），默认 50.0"},
                 },
                 "required": [
                     "stator_outer_radius", "stator_inner_radius",
@@ -387,16 +387,16 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_solution_setup",
-            "description": "添加求解设置（瞬态 / 磁静态 / 涡流）。",
+            "description": "添加求解设置（瞬态 / 磁静态 / 涡流）。默认使用 Transient 瞬态求解器。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
-                    "solver_type": {"type": "string", "enum": ["Transient", "Magnetostatic", "EddyCurrent"], "description": "求解器类型"},
-                    "stop_time": {"type": "number", "description": "仿真结束时间（秒，瞬态专用）"},
-                    "time_step": {"type": "number", "description": "时间步长（秒，瞬态专用）"},
-                    "num_passes": {"type": "integer", "description": "自适应网格剖分最大迭代次数"},
-                    "frequency_Hz": {"type": "number", "description": "涡流求解频率（Hz，EddyCurrent 专用）"},
+                    "solver_type": {"type": "string", "enum": ["Transient", "Magnetostatic", "EddyCurrent"], "description": "求解器类型，默认 Transient；提取转矩/反电动势用 Transient，提取电感/磁链用 Magnetostatic，提取涡流损耗用 EddyCurrent"},
+                    "stop_time": {"type": "number", "description": "仿真结束时间（秒），solver_type=Transient 时必填，默认 0.02（一个电周期约 20ms/50Hz）"},
+                    "time_step": {"type": "number", "description": "时间步长（秒），solver_type=Transient 时必填，默认 0.0001；建议为 stop_time/200 量级"},
+                    "num_passes": {"type": "integer", "description": "自适应网格剖分最大迭代次数，默认 10"},
+                    "frequency_Hz": {"type": "number", "description": "涡流激励频率（Hz），solver_type=EddyCurrent 时必填，默认 50"},
                 },
             },
         },
@@ -418,12 +418,12 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_torque",
-            "description": "提取平均转矩和转矩波形。",
+            "description": "提取平均转矩和转矩波形。需先完成 Transient 或 Magnetostatic 求解。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "setup_name": {"type": "string"},
-                    "sweep_name": {"type": "string"},
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "扫描/时间步名称，瞬态仿真用 'LastAdaptive'，参数扫描用对应扫描名，默认 LastAdaptive"},
                 },
             },
         },
@@ -436,8 +436,8 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "phase_name": {"type": "string", "description": "相名称，如 PhaseA"},
-                    "setup_name": {"type": "string"},
+                    "phase_name": {"type": "string", "description": "相名称，如 PhaseA；需与 setup_winding 中 phase_name 一致"},
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1；必须为 Transient 类型"},
                     "sweep_name": {"type": "string", "description": "扫描/时间步名称，如 LastAdaptive"},
                 },
             },
@@ -447,12 +447,12 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_flux_density",
-            "description": "获取指定点的磁通密度幅值。",
+            "description": "获取指定点的磁通密度幅值（Mag_B，单位 T）。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "setup_name": {"type": "string"},
-                    "point": {"type": "array", "items": {"type": "number"}, "description": "[x, y, z]（mm）"},
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "[x, y, z] 坐标（mm），默认 [0, 0, 0]（模型原点/气隙中心）"},
                 },
             },
         },
@@ -465,8 +465,8 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "setup_name": {"type": "string"},
-                    "sweep_name": {"type": "string", "description": "扫描/时间步名称，如 LastAdaptive"},
+                    "setup_name": {"type": "string", "description": "求解设置名称，默认 Setup1"},
+                    "sweep_name": {"type": "string", "description": "扫描/时间步名称，默认 LastAdaptive；Transient 仿真通常用 LastAdaptive"},
                 },
             },
         },
@@ -620,7 +620,7 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "version": {"type": "string", "description": "AEDT 版本，如 '2024.1'"},
-                    "non_graphical": {"type": "boolean"},
+                    "non_graphical": {"type": "boolean", "description": "是否以无界面批处理模式运行，默认 False"},
                 },
             },
         },
@@ -744,7 +744,7 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "connect_mechanical",
             "description": "连接到 Ansys Mechanical 实例。",
-            "parameters": {"type": "object", "properties": {"version": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {"version": {"type": "string", "description": "Ansys 版本号，三位整数字符串，如 '242'（2024 R2）、'241'（2024 R1）、'251'（2025 R1），默认 '242'"}}},
         },
     },
     {
@@ -771,8 +771,8 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "num_modes": {"type": "integer", "description": "提取模态阶数"},
-                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "description": "[f_min, f_max] Hz"},
+                    "num_modes": {"type": "integer", "description": "提取模态阶数，默认 12"},
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[f_min, f_max] 频率范围（Hz），默认 [0, 10000]，例如 [0, 5000]"},
                     "analysis_name": {"type": "string", "description": "Mechanical 中的目标分析名称，默认 Modal"},
                 },
             },
@@ -786,9 +786,9 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "description": "[f_min, f_max] Hz"},
-                    "num_steps": {"type": "integer"},
-                    "damping_ratio": {"type": "number"},
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[f_min, f_max] 频率扫描范围（Hz），默认 [0, 5000]，例如 [0, 3000]"},
+                    "num_steps": {"type": "integer", "description": "频率步数，默认 100"},
+                    "damping_ratio": {"type": "number", "description": "结构阻尼比（无量纲），钢结构约 0.01~0.03，默认 0.02"},
                     "analysis_name": {"type": "string", "description": "Mechanical 中的目标分析名称，默认 Harmonic Response"},
                 },
             },
@@ -818,9 +818,9 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "变量名"},
-                    "value": {"type": "number", "description": "初始值"},
-                    "unit": {"type": "string", "description": "单位，如 mm、deg、A"},
+                    "name": {"type": "string", "description": "变量名，需符合 AEDT 变量命名规则（字母/数字/下划线，不以数字开头），如 'air_gap'、'magnet_thickness'"},
+                    "value": {"type": "number", "description": "初始值（数值部分，单位由 unit 参数指定）"},
+                    "unit": {"type": "string", "description": "AEDT 单位字符串，默认 'mm'；几何尺寸用 'mm'，角度用 'deg'，电流用 'A'，转速用 'rpm'，时间用 's'；必须与 AEDT 单位系统兼容"},
                 },
                 "required": ["name", "value"],
             },
@@ -865,8 +865,8 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "param_name": {"type": "string"},
-                    "result_expression": {"type": "string", "description": "结果表达式，如 Torque、CoreLoss"},
-                    "sweep_name": {"type": "string"},
+                    "result_expression": {"type": "string", "description": "结果表达式，支持别名：'Torque'（自动映射为 Moving1.Torque）、'CoreLoss'、'OhmicLoss'；必须与 create_parametric_sweep 中 result_expressions 所配置的表达式一致"},
+                    "sweep_name": {"type": "string", "description": "扫描名称，留空则使用最近一次参数扫描"},
                 },
                 "required": ["param_name"],
             },
@@ -1056,7 +1056,7 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "iterations": {"type": "integer", "description": "最大迭代步数，默认 300"},
+                    "iterations": {"type": "integer", "description": "最大迭代步数，默认 300；留空则复用 setup_fluent_solver 中设置的 max_iterations"},
                     "report_interval": {"type": "integer", "description": "残差报告输出间隔（步数），默认 10"},
                 },
             },
@@ -1513,8 +1513,8 @@ TOOL_DEFINITIONS = [
                         "items": {"type": "string"},
                         "description": "永磁体几何体名称列表；None 则自动搜索含 'Magnet'/'PM' 的对象",
                     },
-                    "operating_temperature_C": {"type": "number", "description": "工作温度（°C），用于矫顽力温度修正，默认 120"},
-                    "safety_margin": {"type": "number", "description": "退磁安全裕量阈值（0~1），低于此值报警，默认 0.1"},
+                    "operating_temperature_C": {"type": "number", "description": "永磁体工作温度（°C），用于 NdFe35 矫顽力温度修正（线性系数 -0.6%/°C），默认 120；有效范围 0~185°C，超过 186°C 线性模型失效工具会拒绝计算"},
+                    "safety_margin": {"type": "number", "description": "退磁安全裕量阈值（0~1），低于此值报警，默认 0.1（10%）；0 表示不报警，0.2 表示要求 20% 安全裕量"},
                 },
             },
         },
@@ -1532,6 +1532,11 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "version": {"type": "string", "description": "AEDT 版本号，如 '2024.1'"},
                     "non_graphical": {"type": "boolean", "description": "是否无界面运行"},
+                    "motor_type": {
+                        "type": "string",
+                        "enum": ["PMSM", "BLDC", "IM", "SRM", "PMDC", "SYN", "SYNRM", "GRM"],
+                        "description": "电机类型，决定 RMXprt 的 solution_type：PMSM（三相永磁同步，最常用）、BLDC（无刷直流）、IM（三相感应）、SRM（开关磁阻）、PMDC（永磁直流）、SYN（三相同步）、SYNRM（线启动同步磁阻）、GRM（通用旋转电机，默认）；应与后续 create_motor_from_template 的 motor_type 保持一致",
+                    },
                 },
             },
         },
@@ -1772,7 +1777,7 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "output_dir": {"type": "string", "description": "导出目录（空则用 Motor-CAD 默认目录）"},
-                    "is_2d": {"type": "boolean", "description": "True 导出 Maxwell 2D（快），False 导出 Maxwell 3D（含端部效应）"},
+                    "is_2d": {"type": "boolean", "description": "True 导出 Maxwell 2D（速度快，推荐，默认），False 导出 Maxwell 3D（含端部效应，耗时更长）"},
                 },
             },
         },
@@ -1797,7 +1802,7 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "port": {"type": "integer", "description": "gRPC 端口号，默认 50052"},
-                    "server": {"type": "string", "description": "MAPDL 服务器地址，本地启动时忽略"},
+                    "server": {"type": "string", "description": "MAPDL 服务器 IP 地址，默认 '127.0.0.1'；launch_local=True 时忽略此参数"},
                     "launch_local": {"type": "boolean", "description": "True 本地启动，False 连接远程，默认 True"},
                     "nproc": {"type": "integer", "description": "并行核心数（本地启动有效），默认 4"},
                 },
@@ -1869,7 +1874,11 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "result_type": {"type": "string", "description": "stress（应力）/ deformation（变形）/ frequency（固有频率），默认 stress"},
+                    "result_type": {
+                        "type": "string",
+                        "enum": ["stress", "deformation", "frequency"],
+                        "description": "结果类型：stress（von Mises 应力）/ deformation（合位移）/ frequency（固有频率），默认 stress",
+                    },
                 },
             },
         },
@@ -2049,7 +2058,7 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "format": {"type": "string", "description": "输出格式：html 或 pdf，默认 html"},
+                    "format": {"type": "string", "enum": ["html", "pdf"], "description": "输出格式：html（内置模板，始终可用）或 pdf（需 ADR 支持），默认 html"},
                     "filename": {"type": "string", "description": "输出文件名（不含扩展名），默认 motor_analysis_report"},
                 },
             },
