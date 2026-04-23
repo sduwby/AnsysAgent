@@ -27,6 +27,8 @@ from tools import (
     knowledge_tools,
     skill_tools,
     memory_tools,
+    material_tools,
+    database_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -169,6 +171,26 @@ TOOL_REGISTRY: dict[str, callable] = {
     "read_memory": memory_tools.read_memory,
     "save_memory": memory_tools.save_memory,
     "delete_memory": memory_tools.delete_memory,
+    # 材料库管理工具
+    "add_material": material_tools.add_material,
+    "list_materials": material_tools.list_materials,
+    "get_material": material_tools.get_material,
+    "delete_material": material_tools.delete_material,
+    "import_bh_from_csv": material_tools.import_bh_from_csv,
+    "export_material_for_aedt": material_tools.export_material_for_aedt,
+    "update_material_metadata": material_tools.update_material_metadata,
+    # P4 高级 Maxwell 结果分析工具
+    "get_iron_loss_breakdown": result_tools.get_iron_loss_breakdown,
+    "get_cogging_torque_harmonics": result_tools.get_cogging_torque_harmonics,
+    "get_winding_factor": result_tools.get_winding_factor,
+    # P4 DOE / RSM 扫描工具
+    "create_lhs_doe": sweep_tools.create_lhs_doe,
+    "build_rsm": sweep_tools.build_rsm,
+    # 设计结果数据库工具
+    "save_design_result": database_tools.save_design_result,
+    "list_design_results": database_tools.list_design_results,
+    "get_design_result": database_tools.get_design_result,
+    "compare_design_results": database_tools.compare_design_results,
 }
 
 # ---------------------------------------------------------------------------
@@ -280,6 +302,162 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "name": {"type": "string", "description": "memory 名称"},
                     "remove_from_index": {"type": "boolean", "description": "是否同步移除 MEMORY.md 索引，默认 true"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 材料库管理工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "add_material",
+            "description": (
+                "向本地材料库添加一条新材料（或覆盖已有材料）。"
+                "独立于 AEDT，数据持久存储在本地 JSON 库中，可随时通过 export_material_for_aedt 推送到 Maxwell。"
+                "适合保存自测数据、厂商规格书、标定结果等。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "材料名称（唯一标识，如 'M270-35A' 或 '武钢B27AV1400'）"},
+                    "category": {
+                        "type": "string",
+                        "enum": ["silicon_steel", "permanent_magnet", "conductor", "other"],
+                        "description": "材料分类：硅钢片/永磁体/导体/其他",
+                    },
+                    "description": {"type": "string", "description": "材料描述（产地、规格等）"},
+                    "conductivity": {"type": "number", "description": "电导率 (S/m)"},
+                    "mass_density": {"type": "number", "description": "密度 (kg/m³)"},
+                    "bh_curve": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "number"}},
+                        "description": "B-H 曲线点列表 [[H1,B1],[H2,B2],...] (H:A/m, B:T)",
+                    },
+                    "core_loss_kh": {"type": "number", "description": "磁滞损耗系数 Kh（Steinmetz 模型）"},
+                    "core_loss_kc": {"type": "number", "description": "涡流损耗系数 Kc（Steinmetz 模型）"},
+                    "core_loss_ke": {"type": "number", "description": "附加损耗系数 Ke（Steinmetz 模型）"},
+                    "remanence_br": {"type": "number", "description": "剩余磁感应强度 Br (T)，永磁材料专用"},
+                    "coercivity_hcb": {"type": "number", "description": "矫顽力 Hcb (A/m)，永磁材料专用"},
+                    "energy_product": {"type": "number", "description": "最大磁能积 BHmax (kJ/m³)，永磁材料专用"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "自定义标签列表，便于搜索"},
+                    "overwrite": {"type": "boolean", "description": "若材料已存在是否覆盖，默认 false"},
+                },
+                "required": ["name", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_materials",
+            "description": "列出本地材料库中的材料，支持按分类过滤和关键词模糊搜索。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["silicon_steel", "permanent_magnet", "conductor", "other", ""],
+                        "description": "按分类筛选，留空则返回全部",
+                    },
+                    "query": {"type": "string", "description": "按名称/描述/标签模糊搜索，留空则不过滤"},
+                    "top_k": {"type": "integer", "description": "最大返回数量，默认 20"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_material",
+            "description": "获取指定材料的完整详情，包括 B-H 曲线和铁耗系数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "材料名称（精确或大小写不敏感匹配）"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_material",
+            "description": "从本地材料库删除一条材料（内置材料默认受保护）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "材料名称"},
+                    "force": {"type": "boolean", "description": "是否强制删除内置材料，默认 false"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_bh_from_csv",
+            "description": (
+                "从 CSV 文件批量导入 B-H 曲线数据到本地材料库中的指定材料。"
+                "CSV 格式：两列（H列和B列），支持自定义列索引，可选跳过标题行。"
+                "导入后自动按 H 值升序排列，可选在材料不存在时自动创建新条目。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "material_name": {"type": "string", "description": "目标材料名称"},
+                    "csv_path": {"type": "string", "description": "CSV 文件绝对路径"},
+                    "h_column": {"type": "integer", "description": "H 值所在列索引（从 0 开始），默认 0"},
+                    "b_column": {"type": "integer", "description": "B 值所在列索引（从 0 开始），默认 1"},
+                    "skip_header": {"type": "boolean", "description": "是否跳过第一行标题，默认 true"},
+                    "create_if_missing": {"type": "boolean", "description": "材料不存在时自动创建，默认 false"},
+                    "category": {
+                        "type": "string",
+                        "enum": ["silicon_steel", "permanent_magnet", "conductor", "other"],
+                        "description": "自动创建时使用的分类，默认 silicon_steel",
+                    },
+                },
+                "required": ["material_name", "csv_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_material_for_aedt",
+            "description": (
+                "将本地材料库中的材料导出为 create_custom_material 工具所需的参数格式，"
+                "可直接解包传入 Maxwell 工具完成材料推送。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "材料名称"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_material_metadata",
+            "description": "更新材料库中已有材料的元数据字段（描述、标签、铁耗系数等），不会替换已有的 B-H 曲线。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "材料名称"},
+                    "description": {"type": "string", "description": "新描述"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "新标签列表"},
+                    "core_loss_kh": {"type": "number", "description": "更新磁滞损耗系数 Kh"},
+                    "core_loss_kc": {"type": "number", "description": "更新涡流损耗系数 Kc"},
+                    "core_loss_ke": {"type": "number", "description": "更新附加损耗系数 Ke"},
+                    "conductivity": {"type": "number", "description": "更新电导率 (S/m)"},
+                    "mass_density": {"type": "number", "description": "更新密度 (kg/m³)"},
                 },
                 "required": ["name"],
             },
@@ -2064,6 +2242,182 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # -----------------------------------------------------------------------
+    # 结果分析工具（result_tools）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "get_iron_loss_breakdown",
+            "description": "从 Maxwell 仿真结果中提取铁损分项（磁滞损耗、涡流损耗、超量损耗），并可按转子/定子分类汇总。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解方案名称，默认 'Setup1'"},
+                    "time_range": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "时间范围 [t_start, t_end]（秒），默认使用全部时间步",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cogging_torque_harmonics",
+            "description": "对齿槽转矩曲线进行 FFT 分析，返回主要谐波阶次及幅值，辅助评估齿槽效应。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string", "description": "求解方案名称，默认 'Setup1'"},
+                    "n_harmonics": {"type": "integer", "description": "返回的谐波阶次数量，默认 10"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_winding_factor",
+            "description": "计算绕组系数（基波分布系数 × 节距系数），用于评估绕组设计优劣。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "poles": {"type": "integer", "description": "极对数"},
+                    "slots": {"type": "integer", "description": "槽数"},
+                    "coil_pitch": {"type": "integer", "description": "线圈节距（槽数），默认整距"},
+                },
+                "required": ["poles", "slots"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 参数化扫描 / DOE / RSM 工具（sweep_tools）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "create_lhs_doe",
+            "description": "使用拉丁超立方采样（LHS）生成设计试验（DOE）方案，输出归一化或反归一化的采样点。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "param_bounds": {
+                        "type": "object",
+                        "description": "参数边界字典，格式 {参数名: [下界, 上界]}",
+                    },
+                    "n_samples": {"type": "integer", "description": "采样点数量，默认 20"},
+                    "seed": {"type": "integer", "description": "随机种子，默认 42"},
+                },
+                "required": ["param_bounds"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_rsm",
+            "description": "基于已有仿真数据拟合响应面模型（RSM），支持单参数（多项式）和双参数（二次曲面）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "param_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "设计变量名称列表（1 或 2 个元素）",
+                    },
+                    "response_name": {"type": "string", "description": "响应变量名称（如 'torque'）"},
+                    "data_points": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "数据点列表，每个元素包含参数值和响应值，格式 [{param1: v, ..., response: v}, ...]",
+                    },
+                    "degree": {"type": "integer", "description": "多项式阶次（仅单参数时有效），默认 2"},
+                },
+                "required": ["param_names", "response_name", "data_points"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 设计结果数据库工具（database_tools）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "save_design_result",
+            "description": "将一次仿真设计的关键参数与性能指标保存到本地设计数据库，便于后续比较和检索。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "design_name": {"type": "string", "description": "设计方案名称"},
+                    "parameters": {"type": "object", "description": "设计参数字典，如 {槽宽: 3.5, 气隙: 0.8}"},
+                    "results": {"type": "object", "description": "仿真结果字典，如 {转矩: 15.2, 效率: 0.94}"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选标签列表，用于分类检索",
+                    },
+                    "notes": {"type": "string", "description": "备注信息"},
+                },
+                "required": ["design_name", "parameters", "results"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_design_results",
+            "description": "列出设计数据库中所有已保存的设计方案（仅摘要信息）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tag_filter": {"type": "string", "description": "按标签过滤，留空则返回全部"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_design_result",
+            "description": "从设计数据库中检索指定设计方案的完整详情。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "design_id": {"type": "string", "description": "设计方案 ID（由 save_design_result 返回）"},
+                },
+                "required": ["design_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compare_design_results",
+            "description": "对比多个设计方案的参数与性能指标，生成对比表格。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "design_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要对比的设计方案 ID 列表（至少 2 个）",
+                    },
+                    "metrics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要对比的指标字段名，留空则对比所有字段",
+                    },
+                },
+                "required": ["design_ids"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -2080,7 +2434,7 @@ _MAXWELL_TOOL_NAMES: frozenset[str] = frozenset({
     "check_demagnetization",
     # 自定义材料
     "create_custom_material", "import_bh_curve",
-    # 외부 CAD 导入
+    # 外部 CAD 导入
     "import_cad_geometry", "import_dxf",
     # 网格控制
     "setup_length_mesh", "setup_skin_depth_mesh", "setup_surface_mesh", "get_mesh_stats",
@@ -2091,6 +2445,11 @@ _MAXWELL_TOOL_NAMES: frozenset[str] = frozenset({
     # Circuit 驱动器联仿
     "connect_circuit", "create_inverter_circuit", "link_maxwell_to_circuit",
     "run_circuit_simulation", "get_circuit_results",
+    # 结果分析
+    "get_iron_loss_breakdown", "get_cogging_torque_harmonics", "get_winding_factor",
+    # 材料库管理
+    "add_material", "list_materials", "get_material", "delete_material",
+    "import_bh_from_csv", "export_material_for_aedt", "update_material_metadata",
 })
 
 _ICEPAK_TOOL_NAMES: frozenset[str] = frozenset({
@@ -2129,6 +2488,8 @@ _OPTIMIZATION_TOOL_NAMES: frozenset[str] = frozenset({
     # 参数化扫描
     "add_parametric_variable", "create_parametric_sweep", "run_parametric_sweep",
     "get_sweep_results", "create_2d_sweep",
+    # DOE & 响应面
+    "create_lhs_doe", "build_rsm",
 })
 
 _REPORTING_TOOL_NAMES: frozenset[str] = frozenset({
@@ -2144,6 +2505,8 @@ _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "build_knowledge_index", "search_official_docs",
     "list_memories", "read_memory", "save_memory", "delete_memory",
     "use_skill",
+    # 设计方案数据库
+    "save_design_result", "list_design_results", "get_design_result", "compare_design_results",
 })
 
 

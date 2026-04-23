@@ -675,3 +675,301 @@ def check_demagnetization(
         return _ok(append_warnings(result, warnings))
     except Exception as e:
         return _err(str(e))
+
+
+def get_iron_loss_breakdown(
+    project_path: str,
+    design_name: str,
+    setup_name: str,
+    sweep_name: str,
+    stator_objects: list,
+    rotor_objects: list,
+) -> dict:
+    """
+    提取定子和转子各区域的铁芯损耗分项（涡流损耗、磁滞损耗）以及合计值。
+
+    参数:
+        project_path: AEDT 工程文件路径
+        design_name: Maxwell 设计名称
+        setup_name: 求解设置名称
+        sweep_name: 扫描/时间步名称（如 "LastAdaptive"）
+        stator_objects: 定子铁芯对象名称列表
+        rotor_objects: 转子铁芯对象名称列表
+
+    返回:
+        包含各区域损耗分项及汇总的字典
+    """
+    try:
+        import pyaedt
+
+        app = pyaedt.Maxwell2d(
+            projectname=project_path,
+            designname=design_name,
+            non_graphical=True,
+            new_desktop_session=False,
+        )
+
+        sweep_str = f"{setup_name} : {sweep_name}"
+        breakdown = {}
+        warnings = []
+        total_eddy = 0.0
+        total_hysteresis = 0.0
+        total_excess = 0.0
+
+        region_map = {"stator": stator_objects, "rotor": rotor_objects}
+
+        for region_label, obj_list in region_map.items():
+            region_eddy = 0.0
+            region_hysteresis = 0.0
+            region_excess = 0.0
+            obj_details = {}
+
+            for obj_name in obj_list:
+                try:
+                    eddy = app.post.get_scalar_field_value(
+                        "EddyCurrent_Loss",
+                        "Mean",
+                        object_name=obj_name,
+                        setup_sweep_name=sweep_str,
+                    ) or 0.0
+                    hyst = app.post.get_scalar_field_value(
+                        "HysteresisLoss",
+                        "Mean",
+                        object_name=obj_name,
+                        setup_sweep_name=sweep_str,
+                    ) or 0.0
+                    excess = app.post.get_scalar_field_value(
+                        "ExcessLoss",
+                        "Mean",
+                        object_name=obj_name,
+                        setup_sweep_name=sweep_str,
+                    ) or 0.0
+                    obj_total = eddy + hyst + excess
+                    obj_details[obj_name] = {
+                        "eddy_loss_W": round(eddy, 4),
+                        "hysteresis_loss_W": round(hyst, 4),
+                        "excess_loss_W": round(excess, 4),
+                        "total_W": round(obj_total, 4),
+                    }
+                    region_eddy += eddy
+                    region_hysteresis += hyst
+                    region_excess += excess
+                except Exception as e:
+                    obj_details[obj_name] = {"error": str(e)}
+                    warnings.append(f"{obj_name} 损耗提取失败: {e}")
+
+            region_total = region_eddy + region_hysteresis + region_excess
+            breakdown[region_label] = {
+                "eddy_loss_W": round(region_eddy, 4),
+                "hysteresis_loss_W": round(region_hysteresis, 4),
+                "excess_loss_W": round(region_excess, 4),
+                "total_W": round(region_total, 4),
+                "objects": obj_details,
+            }
+            total_eddy += region_eddy
+            total_hysteresis += region_hysteresis
+            total_excess += region_excess
+
+        grand_total = total_eddy + total_hysteresis + total_excess
+        result = {
+            "setup": setup_name,
+            "sweep": sweep_name,
+            "breakdown": breakdown,
+            "total": {
+                "eddy_loss_W": round(total_eddy, 4),
+                "hysteresis_loss_W": round(total_hysteresis, 4),
+                "excess_loss_W": round(total_excess, 4),
+                "grand_total_W": round(grand_total, 4),
+            },
+        }
+        return _ok(append_warnings(result, warnings))
+    except Exception as e:
+        return _err(str(e))
+
+
+def get_cogging_torque_harmonics(
+    project_path: str,
+    design_name: str,
+    setup_name: str,
+    n_harmonics: int = 10,
+) -> dict:
+    """
+    对顿转矩时域数据进行 FFT 分析，返回各次谐波幅值、相位及总谐波失真（THD）。
+
+    参数:
+        project_path: AEDT 工程文件路径
+        design_name: Maxwell 设计名称
+        setup_name: 包含顿转矩瞬态结果的求解设置名称
+        n_harmonics: 输出的谐波阶次数（默认 10）
+
+    返回:
+        谐波幅值表、THD 及基波信息
+    """
+    try:
+        import numpy as np
+        import pyaedt
+
+        app = pyaedt.Maxwell2d(
+            projectname=project_path,
+            designname=design_name,
+            non_graphical=True,
+            new_desktop_session=False,
+        )
+
+        # 从报告中获取顿转矩时间序列
+        report_name = "__cogging_fft_tmp__"
+        try:
+            app.post.create_report(
+                expressions="Moving1.Torque",
+                setup_sweep_name=setup_name,
+                report_name=report_name,
+            )
+            raw = app.post.get_report_data(report_name=report_name)
+            time_vals = raw.primary_sweep_values  # 时间数组（s）
+            torque_vals = list(raw.data_real("Moving1.Torque"))  # 力矩数组（N·m）
+        finally:
+            try:
+                app.post.delete_report(report_name)
+            except Exception:
+                pass
+
+        if not torque_vals or len(torque_vals) < 4:
+            return _err("顿转矩数据点不足，无法进行 FFT 分析（至少需要 4 个时间步）")
+
+        n = len(torque_vals)
+        arr = np.array(torque_vals, dtype=float)
+
+        # 采样间隔（假设均匀采样）
+        dt = (time_vals[-1] - time_vals[0]) / (n - 1) if n > 1 else 1.0
+        fs = 1.0 / dt if dt > 0 else 1.0
+
+        # rfft：只取正频率分量
+        spectrum = np.fft.rfft(arr)
+        freqs = np.fft.rfftfreq(n, d=dt)
+        amplitudes = (2.0 / n) * np.abs(spectrum)
+        amplitudes[0] /= 2.0  # 直流分量不需要×2
+        phases_deg = np.degrees(np.angle(spectrum))
+
+        # 跳过直流（index 0），取前 n_harmonics 个交流分量
+        ac_amps = amplitudes[1:]
+        ac_freqs = freqs[1:]
+        ac_phases = phases_deg[1:]
+
+        limit = min(n_harmonics, len(ac_amps))
+        harmonics = []
+        for i in range(limit):
+            harmonics.append(
+                {
+                    "order": i + 1,
+                    "frequency_Hz": round(float(ac_freqs[i]), 4),
+                    "amplitude_Nm": round(float(ac_amps[i]), 6),
+                    "phase_deg": round(float(ac_phases[i]), 2),
+                }
+            )
+
+        # THD = sqrt(sum of squares of harmonics 2..N) / fundamental
+        fundamental_amp = float(ac_amps[0]) if len(ac_amps) > 0 else 0.0
+        if fundamental_amp > 1e-12 and len(ac_amps) > 1:
+            thd = float(np.sqrt(np.sum(ac_amps[1:limit] ** 2)) / fundamental_amp) * 100.0
+        else:
+            thd = 0.0
+
+        result = {
+            "setup": setup_name,
+            "n_samples": n,
+            "sampling_frequency_Hz": round(fs, 2),
+            "dc_offset_Nm": round(float(amplitudes[0]), 6),
+            "fundamental": harmonics[0] if harmonics else None,
+            "harmonics": harmonics,
+            "thd_percent": round(thd, 2),
+            "summary": f"基波 {harmonics[0]['amplitude_Nm']:.4f} N·m @ {harmonics[0]['frequency_Hz']:.1f} Hz，THD={thd:.1f}%" if harmonics else "无谐波数据",
+        }
+        return _ok(result)
+    except Exception as e:
+        return _err(str(e))
+
+
+def get_winding_factor(
+    poles: int,
+    slots: int,
+    coil_pitch: int = None,
+    harmonics: list = None,
+) -> dict:
+    """
+    计算电机绕组因数（分布因数 kd、节距因数 kp、绕组因数 kw = kd × kp）。
+
+    参数:
+        poles: 极数（如 8）
+        slots: 槽数（如 48）
+        coil_pitch: 线圈节距（槽数），默认为整距 slots/poles
+        harmonics: 需要计算的谐波阶次列表，默认 [1, 3, 5, 7]
+
+    返回:
+        各谐波的 kd、kp、kw 及基波综合绕组因数
+    """
+    try:
+        import math
+
+        if harmonics is None:
+            harmonics = [1, 3, 5, 7]
+
+        if poles <= 0 or slots <= 0:
+            return _err("极数和槽数必须为正整数")
+        if poles % 2 != 0:
+            return _err("极数必须为偶数")
+
+        pole_pairs = poles // 2
+        # 每极槽数
+        slots_per_pole = slots / poles
+        # 每极每相槽数（三相）
+        q = slots / (poles * 3)
+        # 槽距角（电角度）
+        alpha_e = 180.0 / slots_per_pole  # 相邻槽间的电角度（度）
+
+        # 整距节距（槽）
+        full_pitch = slots / poles
+        if coil_pitch is None:
+            coil_pitch = round(full_pitch)
+
+        results_by_harmonic = {}
+        for v in harmonics:
+            # 分布因数 kd_v
+            # kd = sin(q * v * alpha_e / 2) / (q * sin(v * alpha_e / 2))
+            num_angle = math.radians(q * v * alpha_e / 2.0)
+            den_angle = math.radians(v * alpha_e / 2.0)
+            sin_den = math.sin(den_angle)
+            if abs(sin_den) < 1e-12:
+                kd = 1.0
+            else:
+                kd = math.sin(num_angle) / (q * sin_den)
+
+            # 节距因数 kp_v
+            # kp = sin(v * pi * coil_pitch / (2 * full_pitch))
+            kp = math.sin(v * math.pi * coil_pitch / (2.0 * full_pitch))
+
+            kw = kd * kp
+            results_by_harmonic[str(v)] = {
+                "harmonic_order": v,
+                "distribution_factor_kd": round(kd, 6),
+                "pitch_factor_kp": round(kp, 6),
+                "winding_factor_kw": round(abs(kw), 6),
+            }
+
+        # 基波绕组因数
+        kw1 = abs(results_by_harmonic["1"]["winding_factor_kw"]) if "1" in results_by_harmonic else None
+
+        result = {
+            "poles": poles,
+            "slots": slots,
+            "coil_pitch_slots": coil_pitch,
+            "full_pitch_slots": round(full_pitch, 4),
+            "slots_per_pole_per_phase_q": round(q, 4),
+            "slot_pitch_electrical_deg": round(alpha_e, 4),
+            "pitch_ratio": round(coil_pitch / full_pitch, 4),
+            "fundamental_winding_factor_kw1": kw1,
+            "harmonics": results_by_harmonic,
+            "summary": f"kw1={kw1:.4f}，节距比={coil_pitch / full_pitch:.3f}，q={q:.3f}" if kw1 is not None else "计算完成",
+        }
+        return _ok(result)
+    except Exception as e:
+        return _err(str(e))

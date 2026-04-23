@@ -350,3 +350,272 @@ def create_2d_sweep(
         })
     except Exception as e:
         return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：create_lhs_doe - 拉丁超立方试验设计（纯 Python，无第三方 DOE 库）
+# ---------------------------------------------------------------------------
+
+def create_lhs_doe(
+    param_bounds: dict[str, list[float]],
+    n_samples: int = 20,
+    setup_name: str = "Setup1",
+    result_expressions: list[str] | None = None,
+    seed: int = 42,
+) -> dict:
+    """
+    使用拉丁超立方采样（LHS）生成试验设计点，并在 PyAEDT 中创建参数扫描。
+
+    Args:
+        param_bounds: 参数名 -> [最小值, 最大值] 的字典，例如 {"SlotWidth": [2.0, 5.0], "AirGap": [0.5, 1.5]}
+        n_samples: 采样点数，默认 20
+        setup_name: 关联的求解设置名称，默认 "Setup1"
+        result_expressions: 要计算的结果表达式列表；留空时自动推断
+        seed: 随机种子，保证可重现性，默认 42
+    """
+    import random
+    import math
+
+    try:
+        if not param_bounds:
+            return _err("param_bounds 不能为空")
+        if n_samples < 2:
+            return _err("n_samples 必须 >= 2")
+        for pname, bounds in param_bounds.items():
+            if len(bounds) != 2 or bounds[0] >= bounds[1]:
+                return _err(f"参数 '{pname}' 的 bounds 格式错误：应为 [min, max]，且 min < max")
+
+        app = _app()
+        known_variables = _collect_design_variable_names(app)
+        if known_variables:
+            missing = [p for p in param_bounds if p not in known_variables]
+            if missing:
+                return _err(f"参数变量不存在: {', '.join(missing)}；当前可用: {', '.join(sorted(known_variables))}")
+
+        setup_names = _get_setup_names(app)
+        if setup_names and setup_name not in setup_names:
+            return _err(f"求解设置不存在: {setup_name}；当前可用: {', '.join(setup_names)}")
+
+        expressions = _validate_sweep_expressions(
+            app,
+            setup_name,
+            result_expressions or _default_sweep_expressions(app),
+        )
+
+        # ---------- 纯 Python LHS 实现 ----------
+        rng = random.Random(seed)
+        param_names = list(param_bounds.keys())
+        n_params = len(param_names)
+
+        # 生成每个参数的分层随机排列
+        samples: list[list[float]] = []
+        for _ in range(n_params):
+            intervals = list(range(n_samples))
+            rng.shuffle(intervals)
+            col = [(i + rng.random()) / n_samples for i in intervals]
+            samples.append(col)
+
+        # 将 [0,1] 映射到实际 bounds
+        doe_points: list[dict[str, float]] = []
+        for i in range(n_samples):
+            point: dict[str, float] = {}
+            for j, pname in enumerate(param_names):
+                lo, hi = param_bounds[pname]
+                point[pname] = lo + samples[j][i] * (hi - lo)
+            doe_points.append(point)
+
+        # 汇总每个参数的值列表（供 PyAEDT 使用）
+        param_value_lists: dict[str, list[float]] = {
+            pname: [doe_points[i][pname] for i in range(n_samples)]
+            for pname in param_names
+        }
+
+        # 创建第一个参数的扫描
+        first_param = param_names[0]
+        sweep = app.parametrics.add(
+            variable=first_param,
+            values_list=param_value_lists[first_param],
+            variation_type="SingleValues",
+        )
+        # 添加其余参数
+        for pname in param_names[1:]:
+            sweep.add_variation(
+                variable=pname,
+                values_list=param_value_lists[pname],
+                variation_type="SingleValues",
+            )
+        sweep.add_calculation(setup_name, "LastAdaptive", expressions)
+        sweep.update()
+
+        # 更新模型状态
+        state = _get_model_state(app)
+        state.setdefault("parametric_sweeps", {})[sweep.name] = {
+            "type": "lhs",
+            "setup_name": setup_name,
+            "param_names": param_names,
+            "param_bounds": param_bounds,
+            "n_samples": n_samples,
+            "doe_points": doe_points,
+            "result_expressions": expressions,
+            "analyzed": False,
+        }
+
+        return _ok({
+            "sweep_name": sweep.name,
+            "n_samples": n_samples,
+            "n_params": n_params,
+            "param_names": param_names,
+            "doe_points": doe_points,
+            "result_expressions": expressions,
+        })
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：build_rsm - 响应面模型（RSM），基于扫描结果拟合多项式代理模型
+# ---------------------------------------------------------------------------
+
+def build_rsm(
+    sweep_name: str,
+    result_expression: str = "Torque",
+    poly_degree: int = 2,
+) -> dict:
+    """
+    基于已执行的参数扫描结果构建响应面模型（RSM）。
+    支持单参数（1D）和双参数（2D）扫描；多于两个参数时返回错误提示。
+
+    Args:
+        sweep_name: 已分析完成的参数扫描名称
+        result_expression: 要拟合的结果表达式，默认 "Torque"
+        poly_degree: 多项式阶数，默认 2（二次响应面）
+    """
+    try:
+        import numpy as np
+
+        app = _app()
+        state = _get_model_state(app)
+        sweep_meta = state.get("parametric_sweeps", {}).get(sweep_name)
+        if not sweep_meta:
+            return _err(f"未找到扫描 '{sweep_name}'，请先执行 create_parametric_sweep 或 create_lhs_doe")
+        if not sweep_meta.get("analyzed"):
+            return _err(f"扫描 '{sweep_name}' 尚未执行，请先调用 run_parametric_sweep")
+
+        param_names: list[str] = sweep_meta.get("param_names", [])
+        n_params = len(param_names)
+        if n_params == 0:
+            return _err("扫描元数据中未找到参数名称")
+        if n_params > 2:
+            return _err(f"build_rsm 目前仅支持 1~2 个参数，当前扫描含 {n_params} 个参数")
+
+        query_expression = _normalize_result_expression(result_expression)
+        setup_name = sweep_meta.get("setup_name", "Setup1")
+
+        if n_params == 1:
+            # -------- 1D 响应面 --------
+            param_name = param_names[0]
+            data = app.post.get_solution_data(
+                expressions=[query_expression],
+                setup_sweep_name=f"Parametric : {sweep_name}",
+                primary_sweep_variable=param_name,
+            )
+            x = np.array(data.primary_sweep_values, dtype=float)
+            y = np.array(data.data_real(query_expression), dtype=float)
+            if len(x) < poly_degree + 1:
+                return _err(f"数据点数 ({len(x)}) 不足以拟合 {poly_degree} 阶多项式，需至少 {poly_degree + 1} 个点")
+
+            coeffs = np.polyfit(x, y, poly_degree)
+            y_pred = np.polyval(coeffs, x)
+            ss_res = float(np.sum((y - y_pred) ** 2))
+            ss_tot = float(np.sum((y - y.mean()) ** 2))
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+
+            # 最优点（多项式极值）
+            deriv_coeffs = np.polyder(coeffs)
+            roots = np.roots(deriv_coeffs)
+            real_roots = roots[np.isreal(roots)].real
+            bounds = sweep_meta.get("param_bounds", {}).get(param_name)
+            if bounds:
+                real_roots = real_roots[(real_roots >= bounds[0]) & (real_roots <= bounds[1])]
+            candidate_x = np.concatenate([real_roots, x])
+            candidate_y = np.polyval(coeffs, candidate_x)
+            best_idx = int(np.argmax(candidate_y))
+
+            return _ok({
+                "type": "rsm_1d",
+                "sweep_name": sweep_name,
+                "param": param_name,
+                "expression": result_expression,
+                "poly_degree": poly_degree,
+                "coefficients": coeffs.tolist(),
+                "r_squared": round(r2, 6),
+                "optimal_point": {
+                    "param_value": round(float(candidate_x[best_idx]), 6),
+                    "predicted_result": round(float(candidate_y[best_idx]), 6),
+                },
+                "data_points": int(len(x)),
+            })
+
+        else:
+            # -------- 2D 响应面（二变量多项式，阶数固定为 poly_degree=2 的完全二次型） --------
+            param1, param2 = param_names[0], param_names[1]
+
+            # 获取扫描数据：遍历两个参数的组合
+            data1 = app.post.get_solution_data(
+                expressions=[query_expression],
+                setup_sweep_name=f"Parametric : {sweep_name}",
+                primary_sweep_variable=param1,
+            )
+            x1_vals = np.array(data1.primary_sweep_values, dtype=float)
+
+            doe_points: list[dict] = sweep_meta.get("doe_points", [])
+            if not doe_points:
+                return _err("扫描元数据中未找到 doe_points，无法构建 2D RSM；请使用 create_lhs_doe 生成含 doe_points 的扫描")
+
+            n = len(doe_points)
+            X1 = np.array([pt[param1] for pt in doe_points], dtype=float)
+            X2 = np.array([pt[param2] for pt in doe_points], dtype=float)
+            Y = np.array(data1.data_real(query_expression), dtype=float)
+            if len(Y) != n:
+                Y = Y[:n]
+
+            # 完全二次型特征矩阵 [1, x1, x2, x1², x1*x2, x2²]
+            A = np.column_stack([
+                np.ones(n),
+                X1, X2,
+                X1 ** 2, X1 * X2, X2 ** 2,
+            ])
+            coeffs, _, _, _ = np.linalg.lstsq(A, Y, rcond=None)
+            Y_pred = A @ coeffs
+            ss_res = float(np.sum((Y - Y_pred) ** 2))
+            ss_tot = float(np.sum((Y - Y.mean()) ** 2))
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+
+            # 近似最优点（从 doe_points 中选取预测值最大的点）
+            best_idx = int(np.argmax(Y_pred))
+
+            return _ok({
+                "type": "rsm_2d",
+                "sweep_name": sweep_name,
+                "params": [param1, param2],
+                "expression": result_expression,
+                "poly_degree": 2,
+                "coefficients": {
+                    "intercept": round(float(coeffs[0]), 6),
+                    param1: round(float(coeffs[1]), 6),
+                    param2: round(float(coeffs[2]), 6),
+                    f"{param1}^2": round(float(coeffs[3]), 6),
+                    f"{param1}*{param2}": round(float(coeffs[4]), 6),
+                    f"{param2}^2": round(float(coeffs[5]), 6),
+                },
+                "r_squared": round(r2, 6),
+                "optimal_point": {
+                    param1: round(float(X1[best_idx]), 6),
+                    param2: round(float(X2[best_idx]), 6),
+                    "predicted_result": round(float(Y_pred[best_idx]), 6),
+                },
+                "data_points": n,
+            })
+
+    except Exception as e:
+        return _err(str(e))
