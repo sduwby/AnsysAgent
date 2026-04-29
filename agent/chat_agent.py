@@ -40,6 +40,7 @@ from agent.mcp_manager import MCPManager
 from agent.sub_agents import (
     MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
     MotorCADAgent, OptimizationAgent, ReportingAgent,
+    EVPowertrainAgent, NVHAgent, CostAgent,
 )
 from rag.config import DEFAULT_DOC_PATHS, DEFAULT_INDEX_PATH
 from rag.service import build_index, search_index
@@ -168,6 +169,7 @@ class ChatAgent:
         sub_agent_classes = [
             MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
             MotorCADAgent, OptimizationAgent, ReportingAgent,
+            EVPowertrainAgent, NVHAgent, CostAgent,
         ]
         names = []
         for cls in sub_agent_classes:

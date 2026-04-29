@@ -29,6 +29,9 @@ from tools import (
     memory_tools,
     material_tools,
     database_tools,
+    ev_powertrain_tools,
+    nvh_tools,
+    cost_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -191,6 +194,27 @@ TOOL_REGISTRY: dict[str, callable] = {
     "list_design_results": database_tools.list_design_results,
     "get_design_result": database_tools.get_design_result,
     "compare_design_results": database_tools.compare_design_results,
+    # EV 整车电驱系统联仿工具
+    "connect_ev_circuit": ev_powertrain_tools.connect_ev_circuit,
+    "create_battery_model": ev_powertrain_tools.create_battery_model,
+    "create_controller_model": ev_powertrain_tools.create_controller_model,
+    "link_motor_to_powertrain": ev_powertrain_tools.link_motor_to_powertrain,
+    "run_powertrain_simulation": ev_powertrain_tools.run_powertrain_simulation,
+    "get_powertrain_results": ev_powertrain_tools.get_powertrain_results,
+    "get_powertrain_config": ev_powertrain_tools.get_powertrain_config,
+    # NVH 噪声振动分析工具
+    "connect_nvh_mechanical": nvh_tools.connect_nvh_mechanical,
+    "connect_nvh_mapdl": nvh_tools.connect_nvh_mapdl,
+    "extract_maxwell_electromagnetic_forces": nvh_tools.extract_maxwell_electromagnetic_forces,
+    "import_forces_to_structural": nvh_tools.import_forces_to_structural,
+    "run_nvh_modal_analysis": nvh_tools.run_nvh_modal_analysis,
+    "run_nvh_harmonic_response": nvh_tools.run_nvh_harmonic_response,
+    "extract_vibration_noise_results": nvh_tools.extract_vibration_noise_results,
+    "run_nvh_full_chain": nvh_tools.run_nvh_full_chain,
+    # 成本估算工具
+    "estimate_motor_cost": cost_tools.estimate_motor_cost,
+    "get_default_material_prices": cost_tools.get_default_material_prices,
+    "compare_magnet_cost": cost_tools.compare_magnet_cost,
 }
 
 # ---------------------------------------------------------------------------
@@ -2418,6 +2442,283 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # -----------------------------------------------------------------------
+    # EV 整车电驱系统联仿工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_ev_circuit",
+            "description": "连接到 AEDT Circuit 实例用于 EV 整车电驱系统联合仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "AEDT 版本号，如 '2024.1'"},
+                    "non_graphical": {"type": "boolean", "description": "是否无界面批处理模式"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_battery_model",
+            "description": "在 Circuit 中创建电池等效电路模型（Rint/Thevenin），支持 SOC-OCV 查表。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "battery_type": {"type": "string", "enum": ["lithium_ion", "lifepo4", "nmc"], "description": "电池类型"},
+                    "capacity_Ah": {"type": "number", "description": "电池容量（Ah）"},
+                    "nominal_voltage_V": {"type": "number", "description": "标称电压（V）"},
+                    "internal_resistance_mOhm": {"type": "number", "description": "内阻（mΩ）"},
+                    "soc_initial": {"type": "number", "description": "初始 SOC（0~1）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_controller_model",
+            "description": "在 Circuit 中创建电机控制器拓扑（逆变器+FOC/DTC 控制策略+SVPWM/SPWM 调制）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dc_voltage_V": {"type": "number", "description": "直流母线电压（V）"},
+                    "switching_freq_Hz": {"type": "number", "description": "开关频率（Hz）"},
+                    "dead_time_us": {"type": "number", "description": "死区时间（μs）"},
+                    "control_strategy": {"type": "string", "enum": ["FOC", "DTC"], "description": "控制策略"},
+                    "pwm_method": {"type": "string", "enum": ["SVPWM", "SPWM"], "description": "PWM 调制方式"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "link_motor_to_powertrain",
+            "description": "将 Maxwell 电机设计链接到 EV 电驱系统（电池+控制器+电机联仿）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "maxwell_design_name": {"type": "string", "description": "Maxwell 设计名称"},
+                },
+                "required": ["maxwell_design_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_powertrain_simulation",
+            "description": "运行电池→控制器→电机电驱系统联合瞬态仿真，支持自定义驱动工况。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stop_time_ms": {"type": "number", "description": "仿真总时间（ms）"},
+                    "time_step_us": {"type": "number", "description": "时间步（μs）"},
+                    "driving_cycle": {"type": "string", "enum": ["steady_state", "WLTP", "NEDC", "custom"], "description": "驱动工况"},
+                    "speed_profile_rpm": {"type": "array", "items": {"type": "number"}, "description": "自定义转速曲线（rpm）"},
+                    "torque_demand_Nm": {"type": "array", "items": {"type": "number"}, "description": "自定义转矩需求曲线（Nm）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_powertrain_results",
+            "description": "提取电驱系统联仿结果：电池电流/电压、控制器信号、电机转矩/转速等。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "signals": {"type": "array", "items": {"type": "string"}, "description": "信号名列表；None 则提取默认信号集"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_powertrain_config",
+            "description": "返回当前 EV 电驱系统的完整配置（电池+控制器+电机参数）。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # NVH 噪声振动分析工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_nvh_mechanical",
+            "description": "连接 Ansys Mechanical 实例用于 NVH 分析。",
+            "parameters": {"type": "object", "properties": {"version": {"type": "string", "description": "Ansys 版本号，如 '242'"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_nvh_mapdl",
+            "description": "连接 MAPDL 求解器用于 NVH 结构分析。",
+            "parameters": {"type": "object", "properties": {"version": {"type": "string", "description": "Ansys 版本号"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_maxwell_electromagnetic_forces",
+            "description": "从 Maxwell 仿真提取电磁力密度分布（径向/切向），作为 NVH 链路的输入激励源。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "maxwell_project_path": {"type": "string", "description": "Maxwell 项目路径（.aedt）"},
+                    "design_name": {"type": "string", "description": "Maxwell 设计名称"},
+                    "setup_name": {"type": "string", "description": "求解设置名称"},
+                    "force_type": {"type": "string", "enum": ["radial", "tangential", "both"], "description": "力类型"},
+                    "export_path": {"type": "string", "description": "导出文件路径"},
+                },
+                "required": ["maxwell_project_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_forces_to_structural",
+            "description": "将 Maxwell 电磁力密度数据导入 Mechanical/MAPDL 结构模型，作为谐响应分析载荷。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "force_data_path": {"type": "string", "description": "电磁力数据文件路径"},
+                    "structural_project_path": {"type": "string", "description": "结构模型项目路径"},
+                    "mapping_method": {"type": "string", "enum": ["node_based", "element_based"], "description": "映射方式"},
+                },
+                "required": ["force_data_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_nvh_modal_analysis",
+            "description": "运行 NVH 模态分析，提取与电磁力频率匹配的固有频率和振型（建议 >= 20 阶）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "num_modes": {"type": "integer", "description": "模态阶数"},
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[f_min, f_max] 频率范围（Hz）"},
+                    "analysis_name": {"type": "string", "description": "Mechanical 中的分析名称"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_nvh_harmonic_response",
+            "description": "运行 NVH 谐响应分析，计算电磁力激励下的振动响应（建议 >= 200 步）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "频率扫描范围（Hz）"},
+                    "num_steps": {"type": "integer", "description": "频率步数"},
+                    "damping_ratio": {"type": "number", "description": "阻尼比"},
+                    "excitation_source": {"type": "string", "description": "激励源描述"},
+                    "analysis_name": {"type": "string", "description": "Mechanical 中的分析名称"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_vibration_noise_results",
+            "description": "提取 NVH 分析结果：振动加速度、表面速度、估算声压级（SPL）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "analysis_name": {"type": "string", "description": "分析名称"},
+                    "surface_names": {"type": "array", "items": {"type": "string"}, "description": "表面名称列表"},
+                    "freq_of_interest_Hz": {"type": "array", "items": {"type": "number"}, "description": "关注的频率点"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_nvh_full_chain",
+            "description": "一键运行电磁力→结构振动→噪声评估的完整 NVH 链路（5 步自动化）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "maxwell_project_path": {"type": "string", "description": "Maxwell 项目路径"},
+                    "design_name": {"type": "string", "description": "Maxwell 设计名称"},
+                    "setup_name": {"type": "string", "description": "求解设置名称"},
+                    "num_modes": {"type": "integer", "description": "模态阶数"},
+                    "freq_range_hz": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "频率范围（Hz）"},
+                    "num_harmonic_steps": {"type": "integer", "description": "谐响应步数"},
+                    "damping_ratio": {"type": "number", "description": "阻尼比"},
+                },
+                "required": ["maxwell_project_path"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 成本估算工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "estimate_motor_cost",
+            "description": "根据电机几何参数和材料类型估算制造成本（铁芯+绕组+磁钢+结构件+绝缘+加工费），支持批量折扣和区域差异。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stator_outer_diam_mm": {"type": "number", "description": "定子外径（mm）"},
+                    "stator_inner_diam_mm": {"type": "number", "description": "定子内径（mm）"},
+                    "rotor_outer_diam_mm": {"type": "number", "description": "转子外径（mm）"},
+                    "shaft_diam_mm": {"type": "number", "description": "转轴直径（mm）"},
+                    "stack_length_mm": {"type": "number", "description": "叠片长度（mm）"},
+                    "num_slots": {"type": "integer", "description": "槽数"},
+                    "num_poles": {"type": "integer", "description": "极数"},
+                    "magnet_type": {"type": "string", "enum": ["ndfeb", "ferrite"], "description": "磁钢类型"},
+                    "winding_fill_factor": {"type": "number", "description": "槽满率（0~1）"},
+                    "insulation_class": {"type": "string", "enum": ["B", "F", "H"], "description": "绝缘等级"},
+                    "production_volume": {"type": "integer", "description": "生产批量（台）"},
+                    "material_prices": {"type": "object", "description": "自定义材料单价覆盖（元/kg）"},
+                    "manufacturing_region": {"type": "string", "enum": ["china", "eu", "us"], "description": "制造区域"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_default_material_prices",
+            "description": "返回当前默认的材料单价和密度信息（硅钢/铜线/磁钢/铝/轴承钢等）。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compare_magnet_cost",
+            "description": "对比 NdFeB 和铁氧体两种磁钢方案的成本差异，辅助选型决策。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stator_outer_diam_mm": {"type": "number", "description": "定子外径（mm）"},
+                    "stator_inner_diam_mm": {"type": "number", "description": "定子内径（mm）"},
+                    "rotor_outer_diam_mm": {"type": "number", "description": "转子外径（mm）"},
+                    "shaft_diam_mm": {"type": "number", "description": "转轴直径（mm）"},
+                    "stack_length_mm": {"type": "number", "description": "叠片长度（mm）"},
+                    "production_volume": {"type": "integer", "description": "生产批量"},
+                },
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -2498,6 +2799,23 @@ _REPORTING_TOOL_NAMES: frozenset[str] = frozenset({
     "add_image_to_report", "export_report",
 })
 
+_EV_POWERTRAIN_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_ev_circuit", "create_battery_model", "create_controller_model",
+    "link_motor_to_powertrain", "run_powertrain_simulation",
+    "get_powertrain_results", "get_powertrain_config",
+})
+
+_NVH_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_nvh_mechanical", "connect_nvh_mapdl",
+    "extract_maxwell_electromagnetic_forces", "import_forces_to_structural",
+    "run_nvh_modal_analysis", "run_nvh_harmonic_response",
+    "extract_vibration_noise_results", "run_nvh_full_chain",
+})
+
+_COST_TOOL_NAMES: frozenset[str] = frozenset({
+    "estimate_motor_cost", "get_default_material_prices", "compare_magnet_cost",
+})
+
 # Main-Agent 保留的工具（跨软件协调 + 知识检索 + 技能加载）
 _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
@@ -2542,6 +2860,15 @@ REPORTING_TOOL_REGISTRY = _filter_registry(_REPORTING_TOOL_NAMES)
 
 MAIN_TOOL_DEFINITIONS = _filter_definitions(_MAIN_TOOL_NAMES)
 MAIN_TOOL_REGISTRY = _filter_registry(_MAIN_TOOL_NAMES)
+
+EV_POWERTRAIN_TOOL_DEFINITIONS = _filter_definitions(_EV_POWERTRAIN_TOOL_NAMES)
+EV_POWERTRAIN_TOOL_REGISTRY = _filter_registry(_EV_POWERTRAIN_TOOL_NAMES)
+
+NVH_TOOL_DEFINITIONS = _filter_definitions(_NVH_TOOL_NAMES)
+NVH_TOOL_REGISTRY = _filter_registry(_NVH_TOOL_NAMES)
+
+COST_TOOL_DEFINITIONS = _filter_definitions(_COST_TOOL_NAMES)
+COST_TOOL_REGISTRY = _filter_registry(_COST_TOOL_NAMES)
 
 
 def build_use_skill_definition() -> dict:
@@ -2600,7 +2927,10 @@ DELEGATE_TOOL_DEFINITION = {
             "可用 agent_name：maxwell（电磁仿真/网格/结果/RMXprt/Circuit）、"
             "icepak（热分析）、fluent（CFD 流体）、mapdl（结构/NVH/DPF后处理）、"
             "motorcad（Motor-CAD 解析初设计）、optimization（optiSLang优化/参数扫描）、"
-            "reporting（报告生成）。"
+            "reporting（报告生成）、"
+            "ev_powertrain（EV电驱系统联仿：电池+控制器+电机）、"
+            "nvh（NVH噪声振动：电磁力→结构→声学链路）、"
+            "cost（电机成本估算）。"
         ),
         "parameters": {
             "type": "object",
@@ -2610,6 +2940,7 @@ DELEGATE_TOOL_DEFINITION = {
                     "enum": [
                         "maxwell", "icepak", "fluent", "mapdl",
                         "motorcad", "optimization", "reporting",
+                        "ev_powertrain", "nvh", "cost",
                     ],
                     "description": "目标 Sub-Agent 名称",
                 },

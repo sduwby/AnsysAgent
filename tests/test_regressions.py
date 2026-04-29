@@ -956,6 +956,58 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(run_context.metadata["reporting_flow"], "report_export")
         self.assertIn("报告工作流类型", run_context.metadata["stage_guidance"])
 
+    def test_ev_powertrain_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.ev_powertrain_agent import EVPowertrainAgent
+
+        agent = EVPowertrainAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="运行WLTC驱动工况电驱系统联仿")
+        agent.prepare_run_context(run_context, "运行WLTC驱动工况电驱系统联仿")
+        self.assertEqual(run_context.metadata["powertrain_flow"], "powertrain_cosimulation")
+        self.assertIn("电驱系统工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_nvh_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.nvh_agent import NVHAgent
+
+        agent = NVHAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="一键跑完整 NVH 链路")
+        agent.prepare_run_context(run_context, "一键跑完整 NVH 链路")
+        self.assertEqual(run_context.metadata["nvh_flow"], "nvh_full_chain")
+        self.assertIn("NVH 工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_cost_agent_prepare_run_context_adds_domain_metadata(self):
+        from agent.sub_agents.cost_agent import CostAgent
+
+        agent = CostAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="估算电机成本")
+        agent.prepare_run_context(run_context, "估算电机成本")
+        self.assertEqual(run_context.metadata["cost_flow"], "cost_estimation")
+        self.assertIn("成本分析工作流类型", run_context.metadata["stage_guidance"])
+
+    def test_optimization_agent_prepare_run_context_coupled_optimization(self):
+        from agent.sub_agents.optimization_agent import OptimizationAgent
+
+        agent = OptimizationAgent(
+            client=openai_stub.OpenAI(),
+            model="dummy-model",
+            fallback_clients=[],
+        )
+        run_context = omagent_runtime.OmAgentContext(task="在温升约束下最大化效率")
+        agent.prepare_run_context(run_context, "在温升约束下最大化效率")
+        self.assertEqual(run_context.metadata["optimization_flow"], "coupled_optimization")
+        self.assertIn("热-电磁联合优化关键指引", run_context.metadata["stage_guidance"])
+
     def test_domain_agents_finalize_prefix_summary(self):
         cases = [
             ("agent.sub_agents.icepak_agent", "IcepakAgent", "icepak_flow", "em_thermal_coupling"),
@@ -964,6 +1016,9 @@ class RegressionTests(unittest.TestCase):
             ("agent.sub_agents.motorcad_agent", "MotorCADAgent", "motorcad_flow", "export_to_maxwell"),
             ("agent.sub_agents.optimization_agent", "OptimizationAgent", "optimization_flow", "parametric_sweep"),
             ("agent.sub_agents.reporting_agent", "ReportingAgent", "reporting_flow", "report_export"),
+            ("agent.sub_agents.ev_powertrain_agent", "EVPowertrainAgent", "powertrain_flow", "powertrain_cosimulation"),
+            ("agent.sub_agents.nvh_agent", "NVHAgent", "nvh_flow", "nvh_full_chain"),
+            ("agent.sub_agents.cost_agent", "CostAgent", "cost_flow", "cost_estimation"),
         ]
         for module_name, class_name, metadata_key, flow in cases:
             module = __import__(module_name, fromlist=[class_name])

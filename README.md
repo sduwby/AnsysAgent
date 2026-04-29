@@ -52,6 +52,9 @@ DPF 后处理（应力/温度场提取）→ 自动化 HTML/PDF 报告
 | 结果提取 | `result_tools.py` | 11 | 转矩、反电动势、电感、磁链、效率 MAP、退磁校核 |
 | 热分析 | `icepak_tools.py` | 4 | 温升、冷却设计 |
 | 驱动器联仿 | `circuit_tools.py` | 5 | 逆变器电路 + 电机联合仿真 |
+| EV 电驱联仿 | `ev_powertrain_tools.py` | 7 | 电池+控制器+电机整车电驱系统联仿 |
+| NVH 分析 | `nvh_tools.py` | 8 | 电磁力→结构振动→声学完整 NVH 链路 |
+| 成本估算 | `cost_tools.py` | 3 | 材料用量+制造工艺成本估算 |
 | 结构振动 | `mechanical_tools.py` | 5 | 固有频率、NVH、谐响应分析 |
 | 参数扫描 | `sweep_tools.py` | 5 | 单参数/二维笛卡尔积扫描 |
 | 参数优化 | `optislang_tools.py` | 9 | 敏感性分析、ARSM/EA 多目标优化 |
@@ -291,12 +294,15 @@ AnsysAgent/
 │   ├── tool_definitions.py        # 工具注册表 + OpenAI function calling 定义
 │   ├── prompt.py                  # Main Agent system prompt
 │   ├── log_server.py              # 日志查看 HTTP server（默认端口 7788）
-│   └── sub_agents/                # Maxwell/Icepak/Fluent/... 专业代理
+│   └── sub_agents/                # 10 个专业代理（含 ev_powertrain/nvh/cost）
 ├── tools/
 │   ├── maxwell_tools.py           # 电磁仿真（含自定义材料/B-H曲线）
 │   ├── result_tools.py            # 结果提取（动态报告类别，含退磁校核）
 │   ├── icepak_tools.py            # 热分析（幂等 setup 创建）
 │   ├── circuit_tools.py           # 驱动器联仿
+│   ├── ev_powertrain_tools.py     # EV 电驱系统联仿（电池+控制器+电机）
+│   ├── nvh_tools.py               # NVH 完整链路（电磁力→结构→声学）
+│   ├── cost_tools.py              # 电机成本估算
 │   ├── mechanical_tools.py        # 结构振动/NVH
 │   ├── sweep_tools.py             # 参数化扫描
 │   ├── optislang_tools.py         # 参数优化
