@@ -174,6 +174,9 @@ TOOL_REGISTRY: dict[str, callable] = {
     "read_memory": memory_tools.read_memory,
     "save_memory": memory_tools.save_memory,
     "delete_memory": memory_tools.delete_memory,
+    # 仿真案例沉淀工具
+    "save_simulation_case": memory_tools.save_simulation_case,
+    "search_simulation_cases": memory_tools.search_simulation_cases,
     # 材料库管理工具
     "add_material": material_tools.add_material,
     "list_materials": material_tools.list_materials,
@@ -305,8 +308,8 @@ TOOL_DEFINITIONS = [
                     "name": {"type": "string", "description": "memory 名称"},
                     "memory_type": {
                         "type": "string",
-                        "enum": ["user", "feedback", "project", "reference"],
-                        "description": "memory 类型",
+                        "enum": ["user", "feedback", "project", "reference", "simulation_case"],
+                        "description": "memory 类型（simulation_case 用于自动沉淀仿真案例）",
                     },
                     "description": {"type": "string", "description": "一行摘要，用于 MEMORY.md 和相关性检索"},
                     "content": {"type": "string", "description": "memory 正文内容"},
@@ -328,6 +331,46 @@ TOOL_DEFINITIONS = [
                     "remove_from_index": {"type": "boolean", "description": "是否同步移除 MEMORY.md 索引，默认 true"},
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_simulation_case",
+            "description": (
+                "仿真完成后，将任务描述、关键参数、核心结果和经验教训沉淀为仿真案例，"
+                "写入 Memory 形成可检索的历史案例库。"
+                "适合在每次仿真结束时自动或手动调用，积累项目知识。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "案例名称，例如 'PMSM-48s8p-转矩优化'"},
+                    "task_description": {"type": "string", "description": "仿真任务的自然语言描述"},
+                    "key_params": {"type": "object", "description": "关键设计参数，例如 {极对数: 8, 槽数: 48, 磁钢厚度_mm: 5}"},
+                    "key_results": {"type": "object", "description": "核心仿真结果，例如 {平均转矩_Nm: 12.5, 齿槽转矩_Nm: 0.3}"},
+                    "lessons_learned": {"type": "string", "description": "经验教训或结论（可选）"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表，用于辅助分类检索（可选）"},
+                },
+                "required": ["name", "task_description", "key_params", "key_results"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_simulation_cases",
+            "description": (
+                "从历史仿真案例库中检索与当前任务相关的案例。"
+                "返回案例名称、描述和内容摘要，帮助复用经验、避免重复犯错。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "检索关键词，例如 'PMSM 转矩优化' 或 '热分析 温度'"},
+                    "top_k": {"type": "integer", "description": "返回最相关的案例数量，默认 5"},
+                },
             },
         },
     },
@@ -2256,11 +2299,11 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "export_report",
-            "description": "将当前报告导出为 HTML 或 PDF 文件，汇总所有仿真结果。",
+            "description": "将当前报告导出为 HTML、PDF 或 Word (docx) 文件，汇总所有仿真结果。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "format": {"type": "string", "enum": ["html", "pdf"], "description": "输出格式：html（内置模板，始终可用）或 pdf（需 ADR 支持），默认 html"},
+                    "format": {"type": "string", "enum": ["html", "pdf", "docx"], "description": "输出格式：html（内置模板，始终可用）、pdf（需 ADR 支持）或 docx（Word 文档，需 python-docx），默认 html"},
                     "filename": {"type": "string", "description": "输出文件名（不含扩展名），默认 motor_analysis_report"},
                 },
             },
@@ -2822,6 +2865,7 @@ _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "save_project", "open_project", "close_project", "list_designs", "copy_design",
     "build_knowledge_index", "search_official_docs",
     "list_memories", "read_memory", "save_memory", "delete_memory",
+    "save_simulation_case", "search_simulation_cases",
     "use_skill",
     # 设计方案数据库
     "save_design_result", "list_design_results", "get_design_result", "compare_design_results",

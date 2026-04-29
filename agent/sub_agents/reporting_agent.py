@@ -9,8 +9,8 @@ class ReportingAgent(SubAgentBase):
     name = "reporting"
     workflow_stages = ("plan", "collect_assets", "compose_report", "export_report", "summarize")
     description = (
-        "仿真报告生成专家，负责使用 Ansys Dynamic Reporting 或内置 HTML 模板，"
-        "生成包含文本、表格和仿真云图的分析报告，并导出为 HTML/PDF 格式"
+        "仿真报告生成专家，负责使用 Ansys Dynamic Reporting、内置 HTML 模板或 Word (docx) 模板，"
+        "生成包含文本、表格和仿真云图的分析报告，并导出为 HTML/PDF/DOCX 格式"
     )
 
     def __init__(self, client, model, fallback_clients):
@@ -24,10 +24,10 @@ class ReportingAgent(SubAgentBase):
 
     def _infer_reporting_flow(self, task: str) -> tuple[str, list[str]]:
         text = task.lower()
-        if any(token in text for token in ("pdf", "导出", "export")):
+        if any(token in text for token in ("pdf", "docx", "word", "导出", "export")):
             return "report_export", [
                 "检查报告会话和章节内容",
-                "执行 HTML/PDF 导出",
+                "执行 HTML/PDF/DOCX 导出",
                 "确认输出文件已生成",
             ]
         if any(token in text for token in ("图片", "表格", "image", "table", "section", "章节")):

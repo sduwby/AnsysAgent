@@ -21,7 +21,7 @@ _log = get_logger("memory_manager")
 
 MEMORY_DIR: Path = ANSYS_DATA_DIR / "memory"
 MEMORY_ENTRYPOINT: Path = MEMORY_DIR / "MEMORY.md"
-MEMORY_TYPES: tuple[str, ...] = ("user", "feedback", "project", "reference")
+MEMORY_TYPES: tuple[str, ...] = ("user", "feedback", "project", "reference", "simulation_case")
 MAX_ENTRYPOINT_LINES = 200
 MAX_ENTRYPOINT_BYTES = 25_000
 MAX_RELEVANT_MEMORIES = 5
@@ -38,6 +38,8 @@ _MEMORY_GUIDANCE = """## 持久记忆系统
   - `feedback`：用户确认有效或明确纠正过的工作方式
   - `project`：项目中的隐含背景、截止日期、协作约束、决策原因
   - `reference`：外部系统入口、看板、文档、仪表盘等查找线索
+  - `simulation_case`：仿真案例历史记录，包含任务描述、参数、关键结果和经验总结，
+    可用于检索类似仿真案例、复用优化经验、避免重复犯错
 - 不要保存当前会话里的临时任务状态、代码结构、文件路径罗列、可以重新读出来的实现细节
 - 当用户明确要求“记住”“保存经验”“记录偏好”时，应优先考虑调用 memory 工具
 - 当当前问题明显与已保存记忆有关时，应参考相关记忆，但若与当前真实状态冲突，以当前状态为准，并更新旧记忆

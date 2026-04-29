@@ -226,10 +226,11 @@ def export_report(
     filename: str = "motor_analysis_report",
 ) -> dict:
     """
-    将当前报告导出为 HTML 或 PDF 文件。
+    将当前报告导出为 HTML、PDF 或 Word (.docx) 文件。
 
     Args:
-        format: "html" 或 "pdf"（PDF 需要 ADR 或 weasyprint）
+        format: "html"、"pdf" 或 "docx"（PDF 需要 ADR 支持，
+                docx 基于 python-docx 生成符合工程报告规范的 Word 文档）
         filename: 输出文件名（不含扩展名）
     """
     try:
@@ -240,14 +241,18 @@ def export_report(
         if isinstance(session, dict) and session.get("type") == "html":
             if format == "pdf":
                 return _err("内置 HTML 模板后端不支持 PDF 导出，请启用 ADR 或安装 PDF 渲染后端")
-            if format != "html":
-                return _err(f"不支持的导出格式: {format}")
+            if format not in ("html", "docx"):
+                return _err(f"不支持的导出格式: {format}；内置模板后端仅支持 html 或 docx")
         if not _report_items:
             return _err("当前报告内容为空，请先添加节、表格或图片后再导出")
 
         if isinstance(session, dict) and session.get("type") == "html":
-            output_path = os.path.join(session["output_dir"], f"{filename}.html")
-            _render_html_report(session, output_path)
+            if format == "docx":
+                output_path = os.path.join(session["output_dir"], f"{filename}.docx")
+                _render_docx_report(session, output_path)
+            else:
+                output_path = os.path.join(session["output_dir"], f"{filename}.html")
+                _render_html_report(session, output_path)
         else:
             # ADR 导出
             output_path = os.path.join(
@@ -255,6 +260,9 @@ def export_report(
             )
             if format == "pdf":
                 session.renderer.render(output_path, format="pdf")
+            elif format == "docx":
+                # ADR 不直接支持 docx，回退到内置 docx 渲染器
+                _render_docx_report(session, output_path)
             else:
                 session.renderer.render(output_path)
         if not os.path.exists(output_path):
@@ -316,3 +324,108 @@ def _render_html_report(session: dict, output_path: str) -> None:
     html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{title}</title><style>{css}</style></head><body>{''.join(body_parts)}</body></html>"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
+
+
+def _render_docx_report(session: dict, output_path: str) -> None:
+    """基于 python-docx 生成符合工程报告规范的 Word 文档。"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+    except ImportError:
+        raise RuntimeError(
+            "python-docx 未安装，请执行: pip install python-docx>=1.1.0"
+        )
+
+    title = session["title"]
+    sections = session.get("sections", [])
+
+    doc = Document()
+
+    # ── 全局样式 ──────────────────────────────────────────────
+    style = doc.styles["Normal"]
+    style.font.name = "Arial"
+    style.font.size = Pt(10.5)
+    style.paragraph_format.space_after = Pt(6)
+
+    # ── 封面标题 ──────────────────────────────────────────────
+    p_title = doc.add_heading(title, level=0)
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    from datetime import datetime
+    p_meta = doc.add_paragraph()
+    p_meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p_meta.add_run(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    run.font.size = Pt(10)
+    run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    doc.add_paragraph()  # 空行分隔
+
+    # ── 目录占位（Word 打开后可手动更新域） ─────────────────
+    p_toc = doc.add_paragraph()
+    p_toc.add_run("[ 目录 — 在 Word 中按 Ctrl+A → F9 更新域 ]").italic = True
+    doc.add_page_break()
+
+    # ── 正文各节 ──────────────────────────────────────────────
+    for sec in sections:
+        sec_type = sec.get("type")
+
+        if sec_type == "section":
+            level = min(max(sec.get("level", 2), 1), 4)
+            doc.add_heading(sec["title"], level=level)
+            # 保留换行，逐段落写入
+            for para in sec["content"].split("\n"):
+                para = para.strip()
+                if para:
+                    doc.add_paragraph(para)
+
+        elif sec_type == "table":
+            doc.add_heading(sec.get("title", "数据表格"), level=3)
+            data = sec.get("data", [])
+            if not data:
+                doc.add_paragraph("（无数据）")
+                continue
+            cols = list(data[0].keys())
+            table = doc.add_table(rows=1, cols=len(cols))
+            table.style = "Light Grid Accent 1"
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            # 表头
+            for ci, col_name in enumerate(cols):
+                cell = table.rows[0].cells[ci]
+                cell.text = str(col_name)
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.bold = True
+            # 数据行
+            for row_data in data:
+                row_cells = table.add_row().cells
+                for ci, col_name in enumerate(cols):
+                    row_cells[ci].text = str(row_data.get(col_name, ""))
+
+        elif sec_type == "image":
+            img_path = sec["path"]
+            caption = sec.get("caption", "")
+            width_pct = sec.get("width_pct", 80)
+            if os.path.exists(img_path):
+                # 将百分比转为英寸（A4 宽约 6.5 英寸）
+                width_inch = 6.5 * width_pct / 100
+                doc.add_picture(img_path, width=Inches(width_inch))
+                last_paragraph = doc.paragraphs[-1]
+                last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if caption:
+                p_cap = doc.add_paragraph()
+                p_cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p_cap.add_run(caption)
+                run.font.size = Pt(9)
+                run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    # ── 页脚信息 ──────────────────────────────────────────────
+    doc.add_paragraph()
+    p_footer = doc.add_paragraph()
+    p_footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p_footer.add_run("本报告由 AnsysAgent 自动生成 | Powered by Ansys + DeepSeek")
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
+    doc.save(output_path)
