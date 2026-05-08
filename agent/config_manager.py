@@ -79,7 +79,7 @@ _LEGACY_KEY_ENV = {
 }
 
 _BUILTIN_API_KEYS = {
-    "gemini": "AIzaSyCKqwy6JrrhnPq0tGRvvfiQLN1MTbQsgqo",
+    "gemini": "",
 }
 
 _THINKING_MODEL_HINTS = {
