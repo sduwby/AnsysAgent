@@ -614,3 +614,391 @@ def setup_fluid_material(
         return _ok(ok_message("，".join(info_parts), material_name=material_name, density_model=density_model))
     except Exception as e:
         return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：launch_fluent_meshing - 启动 Fluent Meshing 模式（网格划分）
+# ---------------------------------------------------------------------------
+
+def launch_fluent_meshing(
+    precision: str = "double",
+    processors: int = 4,
+    cwd: str | None = None,
+) -> dict:
+    """
+    启动 Fluent Meshing 模式，用于 Watertight Geometry 或 Fault-tolerant 工作流网格划分。
+    与 connect_fluent（solver 模式）互相独立，网格完成后应调用 close_fluent_meshing。
+
+    参考工作流：geometry-mesh-fluent/wf_gmf_02_fluent_meshing.py
+
+    Args:
+        precision: "double"（推荐）或 "single"
+        processors: 并行进程数
+        cwd: 工作目录，网格文件将写入此目录；None 则使用当前目录
+    """
+    global _fluent_session
+    try:
+        import ansys.fluent.core as pyfluent
+
+        launch_kwargs: dict = dict(
+            precision=precision,
+            processor_count=processors,
+            mode="meshing",
+            ui_mode="no_gui_or_graphics",
+        )
+        if cwd is not None:
+            launch_kwargs["cwd"] = cwd
+
+        _fluent_session = pyfluent.launch_fluent(**launch_kwargs)
+        return _ok(ok_message(
+            f"已启动 Fluent Meshing（{precision} 精度，{processors} 进程）",
+            precision=precision,
+            processors=processors,
+            mode="meshing",
+            cwd=cwd,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：run_watertight_meshing_workflow - Watertight Geometry 网格工作流
+# ---------------------------------------------------------------------------
+
+def run_watertight_meshing_workflow(
+    geometry_file: str,
+    output_mesh_file: str,
+    surface_min_size: float = 2.0,
+    surface_max_size: float = 1000.0,
+    volume_fill_type: str = "poly-hexcore",
+    num_boundary_layers: int = 12,
+    hex_max_cell_length: float = 512.0,
+) -> dict:
+    """
+    在 Fluent Meshing 模式下执行完整的 Watertight Geometry 网格工作流：
+    导入几何 → 生成曲面网格 → 描述几何 → 更新边界/区域 → 添加边界层 → 生成体网格 → 写出网格。
+
+    参考工作流：geometry-mesh-fluent/wf_gmf_02_fluent_meshing.py
+
+    Args:
+        geometry_file: 几何文件路径（PMDB、FMD 等）
+        output_mesh_file: 输出网格文件路径（.msh.h5）
+        surface_min_size: 曲面网格最小尺寸
+        surface_max_size: 曲面网格最大尺寸
+        volume_fill_type: 体网格填充类型，"poly-hexcore"（推荐）或 "tetrahedral"
+        num_boundary_layers: 边界层层数
+        hex_max_cell_length: poly-hexcore 最大六面体单元尺寸
+    """
+    try:
+        session = _session()
+        wf = session.workflow
+
+        # 初始化 Watertight Geometry 工作流
+        wf.InitializeWorkflow(WorkflowType="Watertight Geometry")
+
+        # 导入几何
+        geo_import = wf.TaskObject["Import Geometry"]
+        geo_import.Arguments.set_state({"FileName": geometry_file})
+        geo_import.Execute()
+
+        # 生成曲面网格
+        surface_mesh_gen = wf.TaskObject["Generate the Surface Mesh"]
+        surface_mesh_gen.Arguments.set_state({
+            "CFDSurfaceMeshControls": {
+                "MinSize": surface_min_size,
+                "MaxSize": surface_max_size,
+            }
+        })
+        surface_mesh_gen.Execute()
+
+        # 描述几何（流体域，无空洞）
+        describe_geo = wf.TaskObject["Describe Geometry"]
+        describe_geo.UpdateChildTasks(SetupTypeChanged=False)
+        describe_geo.Arguments.set_state({
+            "SetupType": "The geometry consists of only fluid regions with no voids"
+        })
+        describe_geo.UpdateChildTasks(SetupTypeChanged=True)
+        describe_geo.Execute()
+
+        # 更新边界和区域
+        wf.TaskObject["Update Boundaries"].Execute()
+        wf.TaskObject["Update Regions"].Execute()
+
+        # 添加边界层
+        add_bl = wf.TaskObject["Add Boundary Layers"]
+        add_bl.Arguments.set_state({"NumberOfLayers": num_boundary_layers})
+        add_bl.AddChildAndUpdate()
+
+        # 生成体网格
+        vol_mesh_gen = wf.TaskObject["Generate the Volume Mesh"]
+        vol_mesh_gen.Arguments.set_state({
+            "VolumeFill": volume_fill_type,
+            "VolumeFillControls": {"HexMaxCellLength": hex_max_cell_length},
+            "VolumeMeshPreferences": {
+                "CheckSelfProximity": "yes",
+                "ShowVolumeMeshPreferences": True,
+            },
+        })
+        vol_mesh_gen.Execute()
+
+        # 检查并写出网格
+        session.tui.mesh.check_mesh()
+        session.tui.file.write_mesh(output_mesh_file)
+
+        return _ok(ok_message(
+            f"Watertight 网格工作流完成，网格已写入：{output_mesh_file}",
+            geometry_file=geometry_file,
+            output_mesh_file=output_mesh_file,
+            volume_fill_type=volume_fill_type,
+            num_boundary_layers=num_boundary_layers,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：create_named_expression - 创建 Fluent 命名表达式
+# ---------------------------------------------------------------------------
+
+def create_named_expression(
+    name: str,
+    definition: str,
+    is_input_parameter: bool = False,
+) -> dict:
+    """
+    在 Fluent 中创建命名表达式（Named Expression），可在边界条件中引用。
+    适用于参数化仿真（如 CHT 多工况排气歧管分析）。
+
+    参考工作流：fluent-mechanical/wf_fm_01_fluent.py
+
+    Args:
+        name: 表达式名称（英文，无空格）
+        definition: 表达式定义字符串，例如 "1023.15 [K]" 或
+                    "abs((0.1559 [kg/s] *log(in_temperature/(1 [K^1])))-0.9759 [kg/s])"
+        is_input_parameter: True 则将此表达式标记为输入参数（可在参数研究中扫描）
+    """
+    try:
+        session = _session()
+        named_exprs = session.settings.setup.named_expressions
+
+        # 创建并定义表达式
+        named_exprs.create(name)
+        named_exprs[name].definition = definition
+        if is_input_parameter:
+            named_exprs[name].input_parameter = True
+
+        return _ok(ok_message(
+            f"已创建命名表达式 '{name}' = {definition[:80]}{'…' if len(definition) > 80 else ''}",
+            name=name,
+            definition=definition,
+            is_input_parameter=is_input_parameter,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：assign_cell_zone_material - 为流体/固体区域指定材料（版本自适应）
+# ---------------------------------------------------------------------------
+
+def assign_cell_zone_material(
+    zone_name: str,
+    material_name: str,
+    zone_type: str = "fluid",
+) -> dict:
+    """
+    为 Fluent 中的流体或固体 Cell Zone 指定材料，
+    自动适配 Fluent 2024 R2 及之前/之后的 API 变化。
+
+    参考工作流：fluent-mechanical/wf_fm_01_fluent.py
+
+    Args:
+        zone_name: Cell Zone 名称，支持通配符（如 "*fluid*"）
+        material_name: 材料名称（已在 Fluent 材料库中存在）
+        zone_type: "fluid" 或 "solid"
+    """
+    try:
+        import ansys.fluent.core as pyfluent
+        session = _session()
+        czc = session.settings.setup.cell_zone_conditions
+        fluent_ver = session.get_fluent_version()
+        v242 = pyfluent.FluentVersion.v242
+
+        if zone_type == "fluid":
+            zone_obj = czc.fluid[zone_name]
+            if fluent_ver < v242:
+                zone_obj.material = material_name
+            else:
+                zone_obj.general.material = material_name
+        elif zone_type == "solid":
+            zone_obj = czc.solid[zone_name]
+            if fluent_ver < v242:
+                zone_obj.material = material_name
+            else:
+                zone_obj.general.material = material_name
+        else:
+            return _err(f"zone_type 仅支持 'fluid' 或 'solid'，收到：{zone_type}")
+
+        return _ok(ok_message(
+            f"已为 {zone_type} 区域 '{zone_name}' 指定材料 '{material_name}'",
+            zone_name=zone_name,
+            material_name=material_name,
+            zone_type=zone_type,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：update_named_expression - 更新命名表达式值（多工况参数化）
+# ---------------------------------------------------------------------------
+
+def update_named_expression(name: str, new_definition: str) -> dict:
+    """
+    更新已有命名表达式的定义值，用于多工况参数化仿真循环。
+
+    参考工作流：fluent-mechanical/wf_fm_01_fluent.py（温度多工况循环）
+
+    Args:
+        name: 已存在的表达式名称
+        new_definition: 新的表达式定义字符串，例如 "683.15 [K]"
+    """
+    try:
+        session = _session()
+        session.settings.setup.named_expressions[name].definition = new_definition
+        return _ok(ok_message(
+            f"已将表达式 '{name}' 更新为：{new_definition}",
+            name=name,
+            new_definition=new_definition,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：export_surface_data_ascii - 导出边界面数据到 CSV（CHT 工作流）
+# ---------------------------------------------------------------------------
+
+def export_surface_data_ascii(
+    output_file: str,
+    surface_names: list[str],
+    quantities: list[str] | None = None,
+    location: str = "node",
+    delimiter: str = "comma",
+) -> dict:
+    """
+    将指定边界面的仿真数据导出为 ASCII/CSV 文件，供 Mechanical 热力耦合映射使用。
+    适用于 CHT 工作流：导出 HTC（对流换热系数）和温度到 Mechanical。
+
+    参考工作流：fluent-mechanical/wf_fm_01_fluent.py（export_ascii）
+
+    Args:
+        output_file: 输出文件名（含扩展名，如 "htc_temp_mapping.csv"）
+        surface_names: 要导出的边界面名称列表（如 ["interface_solid"]）
+        quantities: 要导出的物理量列表；
+                    None 则默认导出 ["temperature", "heat-transfer-coef-wall"]
+        location: 数据位置，"node"（节点）或 "cell"（单元中心）
+        delimiter: 分隔符，"comma"（逗号）或 "tab"（制表符）
+    """
+    try:
+        session = _session()
+        if quantities is None:
+            quantities = ["temperature", "heat-transfer-coef-wall"]
+
+        session.settings.file.export.ascii(
+            file_name=output_file,
+            surface_name_list=surface_names,
+            delimiter=delimiter,
+            cell_func_domain=quantities,
+            location=location,
+        )
+
+        return _ok(ok_message(
+            f"边界面数据已导出至：{output_file}（面={surface_names}，量={quantities}）",
+            output_file=output_file,
+            surface_names=surface_names,
+            quantities=quantities,
+            location=location,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：run_multi_condition_simulation - 多工况批量仿真
+# ---------------------------------------------------------------------------
+
+def run_multi_condition_simulation(
+    parameter_name: str,
+    condition_list: list[dict],
+    output_dir: str = ".",
+    iterations_per_case: int = 200,
+) -> dict:
+    """
+    批量运行多个工况的 Fluent 仿真，每个工况更新一个命名表达式参数后迭代求解，
+    并将结果文件保存至指定目录。
+
+    参考工作流：fluent-mechanical/wf_fm_01_fluent.py（temperature_values 多工况循环）
+
+    Args:
+        parameter_name: 要在各工况中更新的命名表达式名称（如 "in_temperature"）
+        condition_list: 工况列表，每项为 {"label": str, "value": str} 格式，
+                        例如 [{"label": "HIGH_TEMP", "value": "1023.15 [K]"}, ...]
+        output_dir: 结果文件保存目录
+        iterations_per_case: 每个工况的迭代步数
+    """
+    try:
+        import os
+        from tools.utils import ensure_parent_dir
+        session = _session()
+        results = []
+
+        for cond in condition_list:
+            label = cond["label"]
+            value = cond["value"]
+
+            # 更新参数
+            session.settings.setup.named_expressions[parameter_name].definition = value
+
+            # 混合初始化 + 迭代
+            session.solution.initialization.hybrid_initialize()
+            session.solution.run_calculation.iterate(iter_count=iterations_per_case)
+
+            # 保存 Case+Data
+            case_name = os.path.join(output_dir, f"results_{label}.cas.h5")
+            ensure_parent_dir(case_name)
+            session.settings.file.write_case_data(file_name=case_name)
+
+            results.append({
+                "label": label,
+                "parameter_value": value,
+                "case_file": case_name,
+                "iterations": iterations_per_case,
+            })
+
+        return _ok(ok_message(
+            f"多工况仿真完成：{len(results)} 个工况，参数='{parameter_name}'",
+            parameter_name=parameter_name,
+            conditions=results,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：close_fluent - 退出 Fluent 会话
+# ---------------------------------------------------------------------------
+
+def close_fluent() -> dict:
+    """
+    退出当前 Fluent 会话（solver 或 meshing 模式），释放进程资源。
+    每次完成仿真后应调用此函数。
+    """
+    global _fluent_session
+    try:
+        if _fluent_session is not None:
+            _fluent_session.exit()
+            _fluent_session = None
+        return _ok(ok_message("Fluent 会话已退出", closed=True))
+    except Exception as e:
+        return _err(str(e))

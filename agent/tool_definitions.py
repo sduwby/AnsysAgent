@@ -98,6 +98,15 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_fluent_results": fluent_tools.get_fluent_results,
     "export_fluent_data": fluent_tools.export_fluent_data,
     "setup_fluid_material": fluent_tools.setup_fluid_material,
+    # Fluent Meshing & 参数化多工况工具
+    "launch_fluent_meshing": fluent_tools.launch_fluent_meshing,
+    "run_watertight_meshing_workflow": fluent_tools.run_watertight_meshing_workflow,
+    "create_named_expression": fluent_tools.create_named_expression,
+    "assign_cell_zone_material": fluent_tools.assign_cell_zone_material,
+    "update_named_expression": fluent_tools.update_named_expression,
+    "export_surface_data_ascii": fluent_tools.export_surface_data_ascii,
+    "run_multi_condition_simulation": fluent_tools.run_multi_condition_simulation,
+    "close_fluent": fluent_tools.close_fluent,
     # 自定义材料工具（Maxwell）
     "create_custom_material": maxwell_tools.create_custom_material,
     "import_bh_curve": maxwell_tools.import_bh_curve,
@@ -144,6 +153,14 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_motorcad_performance_map": motorcad_tools.get_motorcad_performance_map,
     "export_motorcad_to_maxwell": motorcad_tools.export_motorcad_to_maxwell,
     "disconnect_motorcad": motorcad_tools.disconnect_motorcad,
+    # Mechanical 独立批处理模式工具
+    "launch_mechanical_standalone": mechanical_tools.launch_mechanical_standalone,
+    "mechanical_run_script": mechanical_tools.mechanical_run_script,
+    "mechanical_upload_file": mechanical_tools.mechanical_upload_file,
+    "mechanical_download_file": mechanical_tools.mechanical_download_file,
+    "run_steady_state_thermal": mechanical_tools.run_steady_state_thermal,
+    "import_fluent_htc_to_mechanical": mechanical_tools.import_fluent_htc_to_mechanical,
+    "mechanical_exit": mechanical_tools.mechanical_exit,
     # PyMAPDL 结构强度 / NVH 工具
     "connect_mapdl": mapdl_tools.connect_mapdl,
     "run_rotor_stress_analysis": mapdl_tools.run_rotor_stress_analysis,
@@ -151,6 +168,11 @@ TOOL_REGISTRY: dict[str, callable] = {
     "run_nvh_harmonic_analysis": mapdl_tools.run_nvh_harmonic_analysis,
     "get_mapdl_structural_results": mapdl_tools.get_mapdl_structural_results,
     "disconnect_mapdl": mapdl_tools.disconnect_mapdl,
+    # MapdlPool 子模型工具
+    "connect_mapdl_pool": mapdl_tools.connect_mapdl_pool,
+    "load_mapdl_pool_model": mapdl_tools.load_mapdl_pool_model,
+    "run_mapdl_pool_submodel": mapdl_tools.run_mapdl_pool_submodel,
+    "disconnect_mapdl_pool": mapdl_tools.disconnect_mapdl_pool,
     # PyDPF-Post 结果后处理工具
     "load_dpf_result": dpf_tools.load_dpf_result,
     "get_dpf_stress": dpf_tools.get_dpf_stress,
@@ -158,6 +180,13 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_dpf_displacement": dpf_tools.get_dpf_displacement,
     "get_dpf_field_statistics": dpf_tools.get_dpf_field_statistics,
     "export_dpf_results_to_csv": dpf_tools.export_dpf_results_to_csv,
+    # DPF-Core 底层工具（子模型插值、热分析 .rth）
+    "connect_dpf_server": dpf_tools.connect_dpf_server,
+    "load_dpf_core_model": dpf_tools.load_dpf_core_model,
+    "get_dpf_core_temperature": dpf_tools.get_dpf_core_temperature,
+    "find_result_files": dpf_tools.find_result_files,
+    "create_dpf_interpolator": dpf_tools.create_dpf_interpolator,
+    "interpolate_boundary_displacements": dpf_tools.interpolate_boundary_displacements,
     # 自动化报告生成工具
     "create_report_session": dynamic_reporting_tools.create_report_session,
     "add_report_section": dynamic_reporting_tools.add_report_section,
@@ -1053,6 +1082,117 @@ TOOL_DEFINITIONS = [
         },
     },
     # -----------------------------------------------------------------------
+    # Mechanical 独立批处理模式工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "launch_mechanical_standalone",
+            "description": "以独立批处理模式启动 Ansys Mechanical（通过 ansys-mechanical-core），适用于不依赖 AEDT 的 PCB 热分析、排气歧管热力耦合等完整 Mechanical 工作流。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "batch": {"type": "boolean", "description": "True 以批处理模式运行（无图形界面），默认 True"},
+                    "cleanup_on_exit": {"type": "boolean", "description": "退出时自动清理临时文件，默认 False"},
+                    "version": {"type": "string", "description": "Ansys 版本号，如 '251'（2025 R1）；None 使用默认安装版本"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mechanical_run_script",
+            "description": "在当前 Mechanical 会话中执行任意 Python/ACT 脚本，返回脚本输出，适用于独立批处理模式下精细控制 Mechanical 操作。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string", "description": "要在 Mechanical 中执行的 Python 脚本字符串"},
+                },
+                "required": ["script"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mechanical_upload_file",
+            "description": "将本地文件上传到 Mechanical 服务器项目目录（独立批处理模式专用），用于传递几何文件、材料 XML、CFD 结果 CSV 等输入文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "local_file_path": {"type": "string", "description": "本地文件的绝对路径"},
+                },
+                "required": ["local_file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mechanical_download_file",
+            "description": "从 Mechanical 服务器项目目录下载结果文件（图片、数据等）到本地。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_file_path": {"type": "string", "description": "服务器上的文件完整路径"},
+                    "local_target_dir": {"type": "string", "description": "本地目标目录"},
+                },
+                "required": ["server_file_path", "local_target_dir"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_steady_state_thermal",
+            "description": "在独立 Mechanical 中执行稳态热分析：导入几何 → 设置内热源 → 设置对流边界 → 求解 → 导出结果图。适用于 PCB/芯片热设计工作流。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "geometry_file_var": {"type": "string", "description": "Mechanical 会话中已定义的几何文件路径变量名，默认 'geometry_path'"},
+                    "internal_heat_gen_w_m3": {"type": "number", "description": "内热生成率（W/m³），默认 5e7"},
+                    "heated_component_ns": {"type": "string", "description": "施加内热的命名选择名称，默认 'ic-6'"},
+                    "convection_film_coeff": {"type": "number", "description": "对流换热系数（W/m²·°C），默认 5.0"},
+                    "convection_ns": {"type": "string", "description": "施加对流的命名选择名称，默认 'all_bodies'"},
+                    "output_dir": {"type": "string", "description": "结果图导出目录；None 则使用 Mechanical 项目目录"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_fluent_htc_to_mechanical",
+            "description": "将 Fluent CHT 分析导出的 HTC/温度 CSV 文件作为外部数据导入 Mechanical，用于瞬态热分析的对流边界条件映射（排气歧管热力耦合工作流）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "csv_file_vars": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Mechanical 会话中已定义的 CSV 文件路径变量名列表（如 ['temp_htc_data_high_path', 'temp_htc_data_med_path']）",
+                    },
+                    "csv_labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "每个文件对应的标签（如 ['High', 'Med', 'Low']），用于时间步映射",
+                    },
+                    "target_ns": {"type": "string", "description": "施加导入对流的命名选择名称（Mechanical 中的 interface 面），默认 'interface_surface'"},
+                },
+                "required": ["csv_file_vars", "csv_labels"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mechanical_exit",
+            "description": "退出当前 Mechanical 会话并释放资源（独立批处理模式专用），每次完成分析后应调用以避免进程残留。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
     # 参数化扫描工具定义
     # -----------------------------------------------------------------------
     {
@@ -1381,6 +1521,145 @@ TOOL_DEFINITIONS = [
                     },
                 },
             },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # Fluent Meshing & 参数化多工况工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "launch_fluent_meshing",
+            "description": "启动 Fluent Meshing 模式，用于 Watertight Geometry 或 Fault-tolerant 工作流网格划分，与 connect_fluent（solver 模式）互相独立。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "precision": {"type": "string", "enum": ["double", "single"], "description": "浮点精度，推荐 double"},
+                    "processors": {"type": "integer", "description": "并行进程数，默认 4"},
+                    "cwd": {"type": "string", "description": "工作目录，网格文件写入此目录；None 则使用当前目录"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_watertight_meshing_workflow",
+            "description": "在 Fluent Meshing 模式下执行完整的 Watertight Geometry 网格工作流：导入几何 → 曲面网格 → 描述几何 → 更新边界/区域 → 边界层 → 体网格 → 写出网格。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "geometry_file": {"type": "string", "description": "几何文件路径（PMDB、FMD 等）"},
+                    "output_mesh_file": {"type": "string", "description": "输出网格文件路径（.msh.h5）"},
+                    "surface_min_size": {"type": "number", "description": "曲面网格最小尺寸，默认 2.0"},
+                    "surface_max_size": {"type": "number", "description": "曲面网格最大尺寸，默认 1000.0"},
+                    "volume_fill_type": {"type": "string", "enum": ["poly-hexcore", "tetrahedral"], "description": "体网格填充类型，默认 poly-hexcore"},
+                    "num_boundary_layers": {"type": "integer", "description": "边界层层数，默认 12"},
+                    "hex_max_cell_length": {"type": "number", "description": "poly-hexcore 最大六面体单元尺寸，默认 512.0"},
+                },
+                "required": ["geometry_file", "output_mesh_file"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_named_expression",
+            "description": "在 Fluent 中创建命名表达式（Named Expression），可在边界条件中引用，适用于参数化仿真（如 CHT 多工况分析）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "表达式名称（英文，无空格）"},
+                    "definition": {"type": "string", "description": "表达式定义字符串，例如 '1023.15 [K]'"},
+                    "is_input_parameter": {"type": "boolean", "description": "是否标记为输入参数（可在参数研究中扫描），默认 False"},
+                },
+                "required": ["name", "definition"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "assign_cell_zone_material",
+            "description": "为 Fluent 中的流体或固体 Cell Zone 指定材料，自动适配 Fluent 2024 R2 前后的 API 变化。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "zone_name": {"type": "string", "description": "Cell Zone 名称，支持通配符（如 '*fluid*'）"},
+                    "material_name": {"type": "string", "description": "材料名称（已在 Fluent 材料库中存在）"},
+                    "zone_type": {"type": "string", "enum": ["fluid", "solid"], "description": "区域类型，默认 fluid"},
+                },
+                "required": ["zone_name", "material_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_named_expression",
+            "description": "更新已有命名表达式的定义值，用于多工况参数化仿真循环（如逐工况更新入口温度）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "已存在的表达式名称"},
+                    "new_definition": {"type": "string", "description": "新的表达式定义字符串，例如 '683.15 [K]'"},
+                },
+                "required": ["name", "new_definition"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_surface_data_ascii",
+            "description": "将指定边界面的仿真数据导出为 ASCII/CSV 文件，供 Mechanical 热力耦合映射使用（如导出 HTC 和温度）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_file": {"type": "string", "description": "输出文件名（含扩展名，如 'htc_temp.csv'）"},
+                    "surface_names": {"type": "array", "items": {"type": "string"}, "description": "要导出的边界面名称列表"},
+                    "quantities": {"type": "array", "items": {"type": "string"}, "description": "要导出的物理量列表；None 则默认导出 temperature 和 heat-transfer-coef-wall"},
+                    "location": {"type": "string", "enum": ["node", "cell"], "description": "数据位置，默认 node"},
+                    "delimiter": {"type": "string", "enum": ["comma", "tab"], "description": "分隔符，默认 comma"},
+                },
+                "required": ["output_file", "surface_names"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_multi_condition_simulation",
+            "description": "批量运行多个工况的 Fluent 仿真，每个工况更新一个命名表达式参数后迭代求解，并将 case+data 文件保存至指定目录。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "parameter_name": {"type": "string", "description": "要在各工况中更新的命名表达式名称（如 'in_temperature'）"},
+                    "condition_list": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "工况标签（用于文件命名）"},
+                                "value": {"type": "string", "description": "该工况的参数值字符串，如 '1023.15 [K]'"},
+                            },
+                            "required": ["label", "value"],
+                        },
+                        "description": "工况列表",
+                    },
+                    "output_dir": {"type": "string", "description": "结果文件保存目录，默认 '.'"},
+                    "iterations_per_case": {"type": "integer", "description": "每个工况的迭代步数，默认 200"},
+                },
+                "required": ["parameter_name", "condition_list"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_fluent",
+            "description": "退出当前 Fluent 会话（solver 或 meshing 模式），释放进程资源。每次完成仿真后应调用。",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     # -----------------------------------------------------------------------
@@ -2137,6 +2416,68 @@ TOOL_DEFINITIONS = [
         },
     },
     # -----------------------------------------------------------------------
+    # MapdlPool 子模型工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_mapdl_pool",
+            "description": "启动 MapdlPool，创建多个并行 MAPDL 实例，适用于子模型（submodeling）、参数化批量仿真等多实例工作流。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "n_instances": {"type": "integer", "description": "Pool 中的 MAPDL 实例数，默认 2（全局+局部模型各一个）"},
+                    "port_start": {"type": "integer", "description": "第一个实例的起始端口号，默认 21000"},
+                    "nproc": {"type": "integer", "description": "每个实例的并行核心数，默认 2"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_mapdl_pool_model",
+            "description": "为 MapdlPool 中指定索引的实例加载 CDB 几何/网格文件，并可选设置该实例的工作目录。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instance_index": {"type": "integer", "description": "Pool 实例索引（0 = 全局模型，1 = 局部模型）"},
+                    "cdb_file_path": {"type": "string", "description": "CDB 文件路径（含完整路径）"},
+                    "working_dir": {"type": "string", "description": "实例工作目录；None 则不修改"},
+                },
+                "required": ["instance_index", "cdb_file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_mapdl_pool_submodel",
+            "description": (
+                "使用 MapdlPool 执行连续子模型仿真：对每个时间步，先求解全局模型，通过 DPF 插值获取局部模型边界位移，"
+                "再施加到局部模型并求解。"
+                "前提：已调用 connect_mapdl_pool + load_mapdl_pool_model + create_dpf_interpolator。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "n_timesteps": {"type": "integer", "description": "时间步总数，默认 10"},
+                    "global_instance_index": {"type": "integer", "description": "Pool 中全局模型实例的索引，默认 0"},
+                    "local_instance_index": {"type": "integer", "description": "Pool 中局部模型实例的索引，默认 1"},
+                    "result_output_dir": {"type": "string", "description": "结果文件输出目录，默认 './outputs/mapdl-dpf'"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "disconnect_mapdl_pool",
+            "description": "退出 MapdlPool 中所有 MAPDL 实例并释放资源。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
     # PyDPF-Post 结果后处理工具定义
     # -----------------------------------------------------------------------
     {
@@ -2223,6 +2564,123 @@ TOOL_DEFINITIONS = [
                     "result_set": {"type": "integer", "description": "时间步编号，默认 1"},
                 },
                 "required": ["output_path"],
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # DPF-Core 底层工具定义（子模型插值、热分析 .rth）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_dpf_server",
+            "description": "连接或启动 DPF 服务器（dpf.core）。local=True 在本机启动本地 DPF Server；local=False 连接远程 DPF Server（需提供 port）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "DPF Server 端口号；local=False 时必填"},
+                    "local": {"type": "boolean", "description": "True 启动本地服务（默认），False 连接远程服务"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_dpf_core_model",
+            "description": "使用 DPF-Core 底层 API 加载仿真结果文件（.rst 或 .rth），支持多域（多核并行 MAPDL 结果）和单文件两种模式。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_file_path": {"type": "string", "description": "主结果文件路径（.rst 或 .rth）"},
+                    "domain_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "多核并行结果文件列表（如 file0.rst, file1.rst, ...）；None 则以单文件模式加载",
+                    },
+                },
+                "required": ["result_file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dpf_core_temperature",
+            "description": "通过 DPF-Core 提取热分析温度场（支持 .rth 文件），适用于 Mechanical 稳态/瞬态热分析结果后处理。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_file_path": {"type": "string", "description": ".rth 文件路径；None 则使用已加载的全局 DPF Model"},
+                    "time_step": {"type": "string", "description": "'last'（最终时间步，默认）或整数字符串（如 '3'）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_result_files",
+            "description": "在指定目录中递归搜索指定扩展名的仿真结果文件（.rst / .rth 等），适用于 Mechanical 项目目录下自动定位结果文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "搜索根目录"},
+                    "extension": {"type": "string", "description": "文件扩展名，如 '.rth'（热分析）或 '.rst'（结构分析），默认 '.rth'"},
+                },
+                "required": ["directory"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_dpf_interpolator",
+            "description": (
+                "创建 DPF 插值算子（on_coordinates），用于子模型工作流：从全局模型结果插值计算局部模型边界节点的位移。"
+                "完成后可调用 interpolate_boundary_displacements 执行插值。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "global_result_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "全局模型结果文件路径列表（支持多核并行）",
+                    },
+                    "local_boundary_node_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "局部模型边界节点 ID 列表",
+                    },
+                    "local_boundary_coordinates": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 3,
+                            "maxItems": 3,
+                        },
+                        "description": "与节点 ID 对应的坐标列表，每项 [x, y, z]（单位：m）",
+                    },
+                },
+                "required": ["global_result_files", "local_boundary_node_ids", "local_boundary_coordinates"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "interpolate_boundary_displacements",
+            "description": (
+                "使用已创建的 DPF 插值算子，从全局模型结果中插值计算局部模型边界节点在指定时间步的位移。"
+                "必须先调用 create_dpf_interpolator 初始化算子。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timestep": {"type": "integer", "description": "全局模型结果时间步编号（从 1 开始），默认 1"},
+                },
             },
         },
     },
@@ -2804,18 +3262,33 @@ _FLUENT_TOOL_NAMES: frozenset[str] = frozenset({
     "connect_fluent", "read_fluent_mesh", "setup_fluid_models", "define_boundary_conditions",
     "setup_fluent_solver", "initialize_fluent", "run_fluent_simulation",
     "get_fluent_results", "export_fluent_data", "setup_fluid_material",
+    # Fluent Meshing & 参数化多工况
+    "launch_fluent_meshing", "run_watertight_meshing_workflow",
+    "create_named_expression", "assign_cell_zone_material",
+    "update_named_expression", "export_surface_data_ascii",
+    "run_multi_condition_simulation", "close_fluent",
 })
 
 _MAPDL_TOOL_NAMES: frozenset[str] = frozenset({
     # Mechanical 结构振动
     "connect_mechanical", "import_maxwell_forces", "run_modal_analysis",
     "run_harmonic_analysis", "get_vibration_results",
+    # Mechanical 独立批处理模式
+    "launch_mechanical_standalone", "mechanical_run_script",
+    "mechanical_upload_file", "mechanical_download_file",
+    "run_steady_state_thermal", "import_fluent_htc_to_mechanical", "mechanical_exit",
     # PyMAPDL 结构强度
     "connect_mapdl", "run_rotor_stress_analysis", "run_thermal_stress_analysis",
     "run_nvh_harmonic_analysis", "get_mapdl_structural_results", "disconnect_mapdl",
-    # PyDPF 后处理
+    # MapdlPool 子模型
+    "connect_mapdl_pool", "load_mapdl_pool_model",
+    "run_mapdl_pool_submodel", "disconnect_mapdl_pool",
+    # PyDPF-Post 后处理
     "load_dpf_result", "get_dpf_stress", "get_dpf_temperature",
     "get_dpf_displacement", "get_dpf_field_statistics", "export_dpf_results_to_csv",
+    # DPF-Core 底层工具
+    "connect_dpf_server", "load_dpf_core_model", "get_dpf_core_temperature",
+    "find_result_files", "create_dpf_interpolator", "interpolate_boundary_displacements",
 })
 
 _MOTORCAD_TOOL_NAMES: frozenset[str] = frozenset({
@@ -2969,7 +3442,7 @@ DELEGATE_TOOL_DEFINITION = {
         "description": (
             "将仿真任务委托给对应的专业 Sub-Agent 执行。"
             "可用 agent_name：maxwell（电磁仿真/网格/结果/RMXprt/Circuit）、"
-            "icepak（热分析）、fluent（CFD 流体）、mapdl（结构/NVH/DPF后处理）、"
+            "icepak（热分析）、fluent（CFD 流体/Meshing/多工况）、mapdl（结构/NVH/MapdlPool子模型/Mechanical独立模式/DPF后处理）、"
             "motorcad（Motor-CAD 解析初设计）、optimization（optiSLang优化/参数扫描）、"
             "reporting（报告生成）、"
             "ev_powertrain（EV电驱系统联仿：电池+控制器+电机）、"

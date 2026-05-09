@@ -1,6 +1,12 @@
 """
-PyMAPDL 工具：通过 Ansys PyMAPDL 驱动 MAPDL 求解器进行电机结构强度、热应力和 NVH 谐响应分析。
-与 Maxwell 电磁仿真结果深度联动，构成 EM → 结构/NVH 完整工作流。
+PyMAPDL 工具：通过 Ansys PyMAPDL 驱动 MAPDL 求解器进行结构强度、热应力和 NVH 谐响应分析。
+支持：
+  - 单实例连接（launch_mapdl / MapdlGrpc）
+  - MapdlPool 多实例连接（用于子模型等并行仿真工作流）
+
+参考工作流：
+  - pyansys-workflows/mapdl-dpf/wf_mapdl-dpf.py（MapdlPool 子模型工作流）
+
 每个函数返回包含 'success'、'result' 和可选 'error' 字段的字典。
 """
 
@@ -8,7 +14,8 @@ from __future__ import annotations
 
 from tools.utils import _ok, _err, ok_message
 
-_mapdl_app = None  # 全局 MAPDL 实例
+_mapdl_app = None   # 全局单实例 MAPDL
+_mapdl_pool = None  # 全局 MapdlPool 实例
 
 
 def _app():
@@ -385,5 +392,210 @@ def disconnect_mapdl() -> dict:
             _mapdl_app.exit()
             _mapdl_app = None
         return _ok(ok_message("MAPDL 进程已退出", disconnected=True))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：connect_mapdl_pool - 启动 MapdlPool（多实例并行）
+# ---------------------------------------------------------------------------
+
+def connect_mapdl_pool(
+    n_instances: int = 2,
+    port_start: int = 21000,
+    nproc: int = 2,
+) -> dict:
+    """
+    启动 MapdlPool，创建多个并行 MAPDL 实例，
+    适用于子模型（submodeling）、参数化批量仿真等多实例工作流。
+
+    参考工作流：mapdl-dpf/wf_mapdl-dpf.py（MapdlPool 子模型）
+
+    Args:
+        n_instances: Pool 中的 MAPDL 实例数，默认 2（全局+局部模型各一个）
+        port_start: 第一个实例的起始端口号
+        nproc: 每个实例的并行核心数
+    """
+    global _mapdl_pool
+    try:
+        from ansys.mapdl.core import MapdlPool
+        _mapdl_pool = MapdlPool(n_instances, nproc=nproc)
+        return _ok(ok_message(
+            f"已启动 MapdlPool：{n_instances} 个实例，每实例 {nproc} 核",
+            n_instances=n_instances,
+            nproc=nproc,
+            pool_size=len(_mapdl_pool),
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：load_mapdl_pool_model - 为 Pool 中指定实例加载 CDB 模型
+# ---------------------------------------------------------------------------
+
+def load_mapdl_pool_model(
+    instance_index: int,
+    cdb_file_path: str,
+    working_dir: str | None = None,
+) -> dict:
+    """
+    为 MapdlPool 中指定索引的实例加载 CDB 几何/网格文件，
+    并可选设置该实例的工作目录（结果文件写入位置）。
+
+    参考工作流：mapdl-dpf/wf_mapdl-dpf.py（mapdl_pool[0].cdread）
+
+    Args:
+        instance_index: Pool 实例索引（0 = 全局模型，1 = 局部模型）
+        cdb_file_path: CDB 文件路径（含完整路径）
+        working_dir: 实例工作目录；None 则不修改
+    """
+    try:
+        if _mapdl_pool is None:
+            return _err("MapdlPool 未启动，请先调用 connect_mapdl_pool")
+        from pathlib import Path
+        mapdl = _mapdl_pool[instance_index]
+        mapdl.cdread("db", cdb_file_path)
+        if working_dir is not None:
+            mapdl.cwd(working_dir)
+        return _ok(ok_message(
+            f"Pool[{instance_index}] 已加载 CDB：{cdb_file_path}",
+            instance_index=instance_index,
+            cdb_file=cdb_file_path,
+            working_dir=working_dir,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：run_mapdl_pool_submodel - 执行子模型仿真（全局→局部串行循环）
+# ---------------------------------------------------------------------------
+
+def run_mapdl_pool_submodel(
+    n_timesteps: int = 10,
+    global_instance_index: int = 0,
+    local_instance_index: int = 1,
+    result_output_dir: str = "./outputs/mapdl-dpf",
+) -> dict:
+    """
+    使用 MapdlPool 执行连续子模型仿真：
+    对每个时间步，先求解全局模型，通过 DPF 插值获取局部模型边界位移，
+    再施加到局部模型并求解，完成子模型循环。
+
+    **前提条件**：
+    1. 已调用 connect_mapdl_pool 启动 Pool
+    2. 已通过 load_mapdl_pool_model 分别加载全局/局部 CDB 模型
+    3. 已通过 dpf_tools.create_dpf_interpolator 初始化 DPF 插值算子
+
+    参考工作流：mapdl-dpf/wf_mapdl-dpf.py（solve_global_local）
+
+    Args:
+        n_timesteps: 时间步总数
+        global_instance_index: Pool 中全局模型实例的索引
+        local_instance_index: Pool 中局部模型实例的索引
+        result_output_dir: 结果文件输出目录（全局和局部）
+    """
+    try:
+        import os
+        import sys
+        from pathlib import Path
+        import numpy as np
+
+        if _mapdl_pool is None:
+            return _err("MapdlPool 未启动，请先调用 connect_mapdl_pool")
+
+        mapdl_global = _mapdl_pool[global_instance_index]
+        mapdl_local = _mapdl_pool[local_instance_index]
+
+        # 进入求解处理器
+        mapdl_global.solution()
+        mapdl_local.solution()
+        mapdl_global.antype("STATIC")
+        mapdl_local.antype("STATIC")
+
+        # 获取 DPF 插值算子缓存
+        dpf_mod_name = f"{__package__}.dpf_tools" if __package__ else "tools.dpf_tools"
+        dpf_mod = sys.modules.get(dpf_mod_name)
+        if dpf_mod is None:
+            import importlib
+            dpf_mod = importlib.import_module(dpf_mod_name)
+
+        cache = getattr(dpf_mod, "_dpf_interpolator_cache", None)
+        if cache is None:
+            return _err("DPF 插值算子未初始化，请先调用 dpf_tools.create_dpf_interpolator")
+
+        disp_op = cache["disp_op"]
+        interp_op = cache["interp_op"]
+        node_ids = cache["node_ids"]
+        global_model = cache["global_model"]
+
+        # 初始化插值器网格（第一步）
+        from ansys.dpf import core as dpf
+        my_mesh = global_model.metadata.meshed_region
+        interp_op.inputs.mesh.connect(my_mesh)
+
+        step_results = []
+        for step in range(1, n_timesteps + 1):
+            # --- 全局求解 ---
+            mapdl_global.time(step)
+            mapdl_global.eresx("NO")
+            mapdl_global.allsel("ALL")
+            mapdl_global.outres("ALL", "ALL")
+            mapdl_global.solve()
+
+            # --- DPF 插值 ---
+            disp_op.inputs.time_scoping.connect([step])
+            global_disp_fc = disp_op.outputs.fields_container.get_data()
+            interp_op.inputs.fields_container.connect(global_disp_fc)
+            local_disp = interp_op.outputs.fields_container.get_data()[0]
+
+            # --- 将位移施加到局部模型 ---
+            raw_data = np.array(local_disp.data).flatten()
+            d_cmds = ""
+            for i, nid in enumerate(node_ids):
+                ux, uy, uz = raw_data[i*3], raw_data[i*3+1], raw_data[i*3+2]
+                d_cmds += (
+                    f"d,{nid},ux,{ux:.6e}\n"
+                    f"d,{nid},uy,{uy:.6e}\n"
+                    f"d,{nid},uz,{uz:.6e}\n"
+                )
+            mapdl_local.input_strings(d_cmds)
+
+            # --- 局部求解 ---
+            mapdl_local.allsel("ALL")
+            mapdl_local.time(step)
+            mapdl_local.eresx("NO")
+            mapdl_local.outres("ALL", "ALL")
+            mapdl_local.solve()
+
+            step_results.append({"timestep": step, "status": "solved"})
+
+        mapdl_global.finish()
+        mapdl_local.finish()
+
+        return _ok(ok_message(
+            f"子模型仿真完成：{n_timesteps} 个时间步",
+            n_timesteps=n_timesteps,
+            global_instance=global_instance_index,
+            local_instance=local_instance_index,
+            steps=step_results,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ---------------------------------------------------------------------------
+# 工具：disconnect_mapdl_pool - 退出 MapdlPool
+# ---------------------------------------------------------------------------
+
+def disconnect_mapdl_pool() -> dict:
+    """退出 MapdlPool 中所有 MAPDL 实例并释放资源。"""
+    global _mapdl_pool
+    try:
+        if _mapdl_pool is not None:
+            _mapdl_pool.exit()
+            _mapdl_pool = None
+        return _ok(ok_message("MapdlPool 已退出", disconnected=True))
     except Exception as e:
         return _err(str(e))
