@@ -44,6 +44,8 @@ from tools import (
     cad_import_tools,
     workflow_template_tools,
     cloud_tools,
+    diagnostic_tools,
+    ansys_error_collector,
 )
 
 # ---------------------------------------------------------------------------
@@ -388,6 +390,17 @@ TOOL_REGISTRY: dict[str, callable] = {
     "upload_to_cloud_storage": cloud_tools.upload_to_cloud_storage,
     "download_from_cloud_storage": cloud_tools.download_from_cloud_storage,
     "estimate_cloud_cost": cloud_tools.estimate_cloud_cost,
+    # 智能诊断与异常检测工具
+    "diagnose_error": diagnostic_tools.diagnose_error,
+    "validate_simulation_setup": diagnostic_tools.validate_simulation_setup,
+    "analyze_sensitivity": diagnostic_tools.analyze_sensitivity,
+    "detect_anomalies": diagnostic_tools.detect_anomalies,
+    "get_diagnostic_error_history": diagnostic_tools.get_error_history,
+    # Ansys 错误收集器
+    "get_ansi_error_history": ansys_error_collector.get_error_history,
+    "clear_ansi_error_history": ansys_error_collector.clear_error_history,
+    "diagnose_ansi_error": ansys_error_collector.diagnose_ansi_error,
+    "get_ansi_error_statistics": ansys_error_collector.get_error_statistics,
 }
 
 # ---------------------------------------------------------------------------
@@ -3935,6 +3948,133 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # -----------------------------------------------------------------------
+    # 智能诊断与异常检测工具
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "diagnose_error",
+            "description": "根据错误消息自动诊断问题并提供解决方案。支持 CFD、结构、热分析、电磁等仿真类型。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "error_message": {"type": "string", "description": "错误消息"},
+                    "context": {"type": "string", "description": "额外上下文信息（如仿真类型、操作步骤）"},
+                    "tool_name": {"type": "string", "description": "出错的工具名称"},
+                },
+                "required": ["error_message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_simulation_setup",
+            "description": "验证仿真设置的合理性，检查参数是否在合理范围内。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup_type": {"type": "string", "description": "仿真类型（cfd/structural/thermal/emag）"},
+                    "parameters": {"type": "object", "description": "仿真参数字典"},
+                },
+                "required": ["setup_type", "parameters"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_sensitivity",
+            "description": "分析设计参数对仿真结果的敏感性，支持相关系数和龙卷风图方法。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "parameters": {"type": "object", "description": "设计参数及其取值列表 {param_name: [values]}"},
+                    "results": {"type": "object", "description": "结果参数及其取值列表 {result_name: [values]}"},
+                    "method": {"type": "string", "description": "分析方法：correlation 或 tornado"},
+                },
+                "required": ["parameters", "results"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "detect_anomalies",
+            "description": "检测仿真结果中的异常值，支持范围检查和统计检查两种方法。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "results": {"type": "object", "description": "结果数据 {result_name: [values]}"},
+                    "expected_ranges": {"type": "object", "description": "期望范围 {result_name: {min, max}}"},
+                    "method": {"type": "string", "description": "检测方法：range 或 statistical"},
+                },
+                "required": ["results"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_diagnostic_error_history",
+            "description": "获取智能诊断工具的错误历史记录。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "返回记录数量限制，默认 10"},
+                    "error_type": {"type": "string", "description": "错误类型过滤（可选）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ansi_error_history",
+            "description": "获取 Ansys 软件的错误历史记录。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "返回记录数量限制，默认 10"},
+                    "ansys_tool": {"type": "string", "description": "过滤特定 Ansys 工具（aedt/fluent/mapdl/icepak）"},
+                    "error_type": {"type": "string", "description": "过滤特定错误类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "clear_ansi_error_history",
+            "description": "清空 Ansys 错误历史记录。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "diagnose_ansi_error",
+            "description": "诊断 Ansys 软件错误并提供修复建议。自动匹配 AEDT/Fluent/MAPDL/Icepak 的错误模式。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "error_message": {"type": "string", "description": "错误消息"},
+                    "ansys_tool": {"type": "string", "description": "Ansys 工具类型（aedt/fluent/mapdl/icepak）"},
+                    "context": {"type": "string", "description": "额外上下文信息"},
+                },
+                "required": ["error_message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ansi_error_statistics",
+            "description": "获取 Ansys 错误统计信息，按工具和错误类型分类统计。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -4111,6 +4251,14 @@ _TEST_DATA_TOOL_NAMES: frozenset[str] = frozenset({
     "list_test_data", "list_test_projects", "export_test_report",
 })
 
+# 通用诊断工具（所有 Sub-Agent 共享）
+_DIAGNOSTIC_TOOL_NAMES: frozenset[str] = frozenset({
+    "diagnose_error", "validate_simulation_setup", "analyze_sensitivity",
+    "detect_anomalies", "get_diagnostic_error_history",
+    "get_ansi_error_history", "clear_ansi_error_history",
+    "diagnose_ansi_error", "get_ansi_error_statistics",
+})
+
 # Main-Agent 保留的工具（跨软件协调 + 知识检索 + 技能加载 + 新功能）
 _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
@@ -4146,71 +4294,81 @@ def _filter_registry(names: frozenset[str]) -> dict:
     return {k: v for k, v in TOOL_REGISTRY.items() if k in names}
 
 
-# 每个 Sub-Agent 的工具定义和注册表
-MAXWELL_TOOL_DEFINITIONS = _filter_definitions(_MAXWELL_TOOL_NAMES)
-MAXWELL_TOOL_REGISTRY = _filter_registry(_MAXWELL_TOOL_NAMES)
+def _agent_definitions(names: frozenset[str], include_diagnostic: bool = True) -> list[dict]:
+    combined = names | _DIAGNOSTIC_TOOL_NAMES if include_diagnostic else names
+    return _filter_definitions(combined)
 
-ICEPAK_TOOL_DEFINITIONS = _filter_definitions(_ICEPAK_TOOL_NAMES)
-ICEPAK_TOOL_REGISTRY = _filter_registry(_ICEPAK_TOOL_NAMES)
 
-FLUENT_TOOL_DEFINITIONS = _filter_definitions(_FLUENT_TOOL_NAMES)
-FLUENT_TOOL_REGISTRY = _filter_registry(_FLUENT_TOOL_NAMES)
+def _agent_registry(names: frozenset[str], include_diagnostic: bool = True) -> dict:
+    combined = names | _DIAGNOSTIC_TOOL_NAMES if include_diagnostic else names
+    return _filter_registry(combined)
 
-MAPDL_TOOL_DEFINITIONS = _filter_definitions(_MAPDL_TOOL_NAMES)
-MAPDL_TOOL_REGISTRY = _filter_registry(_MAPDL_TOOL_NAMES)
 
-MOTORCAD_TOOL_DEFINITIONS = _filter_definitions(_MOTORCAD_TOOL_NAMES)
-MOTORCAD_TOOL_REGISTRY = _filter_registry(_MOTORCAD_TOOL_NAMES)
+# 每个 Sub-Agent 的工具定义和注册表（均包含通用诊断工具）
+MAXWELL_TOOL_DEFINITIONS = _agent_definitions(_MAXWELL_TOOL_NAMES)
+MAXWELL_TOOL_REGISTRY = _agent_registry(_MAXWELL_TOOL_NAMES)
 
-OPTIMIZATION_TOOL_DEFINITIONS = _filter_definitions(_OPTIMIZATION_TOOL_NAMES)
-OPTIMIZATION_TOOL_REGISTRY = _filter_registry(_OPTIMIZATION_TOOL_NAMES)
+ICEPAK_TOOL_DEFINITIONS = _agent_definitions(_ICEPAK_TOOL_NAMES)
+ICEPAK_TOOL_REGISTRY = _agent_registry(_ICEPAK_TOOL_NAMES)
 
-REPORTING_TOOL_DEFINITIONS = _filter_definitions(_REPORTING_TOOL_NAMES)
-REPORTING_TOOL_REGISTRY = _filter_registry(_REPORTING_TOOL_NAMES)
+FLUENT_TOOL_DEFINITIONS = _agent_definitions(_FLUENT_TOOL_NAMES)
+FLUENT_TOOL_REGISTRY = _agent_registry(_FLUENT_TOOL_NAMES)
 
-MAIN_TOOL_DEFINITIONS = _filter_definitions(_MAIN_TOOL_NAMES)
-MAIN_TOOL_REGISTRY = _filter_registry(_MAIN_TOOL_NAMES)
+MAPDL_TOOL_DEFINITIONS = _agent_definitions(_MAPDL_TOOL_NAMES)
+MAPDL_TOOL_REGISTRY = _agent_registry(_MAPDL_TOOL_NAMES)
 
-EV_POWERTRAIN_TOOL_DEFINITIONS = _filter_definitions(_EV_POWERTRAIN_TOOL_NAMES)
-EV_POWERTRAIN_TOOL_REGISTRY = _filter_registry(_EV_POWERTRAIN_TOOL_NAMES)
+MOTORCAD_TOOL_DEFINITIONS = _agent_definitions(_MOTORCAD_TOOL_NAMES)
+MOTORCAD_TOOL_REGISTRY = _agent_registry(_MOTORCAD_TOOL_NAMES)
 
-NVH_TOOL_DEFINITIONS = _filter_definitions(_NVH_TOOL_NAMES)
-NVH_TOOL_REGISTRY = _filter_registry(_NVH_TOOL_NAMES)
+OPTIMIZATION_TOOL_DEFINITIONS = _agent_definitions(_OPTIMIZATION_TOOL_NAMES)
+OPTIMIZATION_TOOL_REGISTRY = _agent_registry(_OPTIMIZATION_TOOL_NAMES)
 
-COST_TOOL_DEFINITIONS = _filter_definitions(_COST_TOOL_NAMES)
-COST_TOOL_REGISTRY = _filter_registry(_COST_TOOL_NAMES)
+REPORTING_TOOL_DEFINITIONS = _agent_definitions(_REPORTING_TOOL_NAMES)
+REPORTING_TOOL_REGISTRY = _agent_registry(_REPORTING_TOOL_NAMES)
+
+MAIN_TOOL_DEFINITIONS = _filter_definitions(_MAIN_TOOL_NAMES | _DIAGNOSTIC_TOOL_NAMES)
+MAIN_TOOL_REGISTRY = _filter_registry(_MAIN_TOOL_NAMES | _DIAGNOSTIC_TOOL_NAMES)
+
+EV_POWERTRAIN_TOOL_DEFINITIONS = _agent_definitions(_EV_POWERTRAIN_TOOL_NAMES)
+EV_POWERTRAIN_TOOL_REGISTRY = _agent_registry(_EV_POWERTRAIN_TOOL_NAMES)
+
+NVH_TOOL_DEFINITIONS = _agent_definitions(_NVH_TOOL_NAMES)
+NVH_TOOL_REGISTRY = _agent_registry(_NVH_TOOL_NAMES)
+
+COST_TOOL_DEFINITIONS = _agent_definitions(_COST_TOOL_NAMES)
+COST_TOOL_REGISTRY = _agent_registry(_COST_TOOL_NAMES)
 
 # LS-DYNA 整车碰撞安全仿真工具导出
-CRASH_TOOL_DEFINITIONS = _filter_definitions(_CRASH_TOOL_NAMES)
-CRASH_TOOL_REGISTRY = _filter_registry(_CRASH_TOOL_NAMES)
+CRASH_TOOL_DEFINITIONS = _agent_definitions(_CRASH_TOOL_NAMES)
+CRASH_TOOL_REGISTRY = _agent_registry(_CRASH_TOOL_NAMES)
 
 # 整车 CFD 仿真工具导出
-VEHICLE_CFD_TOOL_DEFINITIONS = _filter_definitions(_VEHICLE_CFD_TOOL_NAMES)
-VEHICLE_CFD_TOOL_REGISTRY = _filter_registry(_VEHICLE_CFD_TOOL_NAMES)
+VEHICLE_CFD_TOOL_DEFINITIONS = _agent_definitions(_VEHICLE_CFD_TOOL_NAMES)
+VEHICLE_CFD_TOOL_REGISTRY = _agent_registry(_VEHICLE_CFD_TOOL_NAMES)
 
 # 疲劳耐久仿真工具导出
-FATIGUE_TOOL_DEFINITIONS = _filter_definitions(_FATIGUE_TOOL_NAMES)
-FATIGUE_TOOL_REGISTRY = _filter_registry(_FATIGUE_TOOL_NAMES)
+FATIGUE_TOOL_DEFINITIONS = _agent_definitions(_FATIGUE_TOOL_NAMES)
+FATIGUE_TOOL_REGISTRY = _agent_registry(_FATIGUE_TOOL_NAMES)
 
 # 整车动力学 VD 仿真工具导出
-VD_TOOL_DEFINITIONS = _filter_definitions(_VD_TOOL_NAMES)
-VD_TOOL_REGISTRY = _filter_registry(_VD_TOOL_NAMES)
+VD_TOOL_DEFINITIONS = _agent_definitions(_VD_TOOL_NAMES)
+VD_TOOL_REGISTRY = _agent_registry(_VD_TOOL_NAMES)
 
 # 整车结构强度仿真工具导出
-VSTRUCT_TOOL_DEFINITIONS = _filter_definitions(_VSTRUCT_TOOL_NAMES)
-VSTRUCT_TOOL_REGISTRY = _filter_registry(_VSTRUCT_TOOL_NAMES)
+VSTRUCT_TOOL_DEFINITIONS = _agent_definitions(_VSTRUCT_TOOL_NAMES)
+VSTRUCT_TOOL_REGISTRY = _agent_registry(_VSTRUCT_TOOL_NAMES)
 
 # 高级网格划分工具导出
-MESHING_TOOL_DEFINITIONS = _filter_definitions(_MESHING_TOOL_NAMES)
-MESHING_TOOL_REGISTRY = _filter_registry(_MESHING_TOOL_NAMES)
+MESHING_TOOL_DEFINITIONS = _agent_definitions(_MESHING_TOOL_NAMES)
+MESHING_TOOL_REGISTRY = _agent_registry(_MESHING_TOOL_NAMES)
 
 # 整车 NVH 仿真工具导出
-VEHICLE_NVH_TOOL_DEFINITIONS = _filter_definitions(_VEHICLE_NVH_TOOL_NAMES)
-VEHICLE_NVH_TOOL_REGISTRY = _filter_registry(_VEHICLE_NVH_TOOL_NAMES)
+VEHICLE_NVH_TOOL_DEFINITIONS = _agent_definitions(_VEHICLE_NVH_TOOL_NAMES)
+VEHICLE_NVH_TOOL_REGISTRY = _agent_registry(_VEHICLE_NVH_TOOL_NAMES)
 
 # 试验数据管理工具导出
-TEST_DATA_TOOL_DEFINITIONS = _filter_definitions(_TEST_DATA_TOOL_NAMES)
-TEST_DATA_TOOL_REGISTRY = _filter_registry(_TEST_DATA_TOOL_NAMES)
+TEST_DATA_TOOL_DEFINITIONS = _agent_definitions(_TEST_DATA_TOOL_NAMES)
+TEST_DATA_TOOL_REGISTRY = _agent_registry(_TEST_DATA_TOOL_NAMES)
 
 
 def build_use_skill_definition() -> dict:
