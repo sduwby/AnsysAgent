@@ -40,6 +40,10 @@ from tools import (
     advanced_meshing_tools,
     vehicle_nvh_tools,
     test_data_tools,
+    webgl_viewer_tools,
+    cad_import_tools,
+    workflow_template_tools,
+    cloud_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -350,6 +354,40 @@ TOOL_REGISTRY: dict[str, callable] = {
     "list_test_data": test_data_tools.list_test_data,
     "list_test_projects": test_data_tools.list_test_projects,
     "export_test_report": test_data_tools.export_test_report,
+    # WebGL 3D可视化工具
+    "start_webgl_viewer": webgl_viewer_tools.start_webgl_viewer,
+    "stop_webgl_viewer": webgl_viewer_tools.stop_webgl_viewer,
+    "export_model_to_gltf": webgl_viewer_tools.export_model_to_gltf,
+    "create_simulation_animation": webgl_viewer_tools.create_simulation_animation,
+    "get_viewer_status": webgl_viewer_tools.get_viewer_status,
+    # CAD导入工具
+    "import_cad_file": cad_import_tools.import_cad_file,
+    "import_step_file": cad_import_tools.import_step_file,
+    "import_stl_file": cad_import_tools.import_stl_file,
+    "convert_cad_format": cad_import_tools.convert_cad_format,
+    "list_supported_cad_formats": cad_import_tools.list_supported_cad_formats,
+    "check_cad_file": cad_import_tools.check_cad_file,
+    "batch_import_cad_files": cad_import_tools.batch_import_cad_files,
+    # 仿真流程模板工具
+    "list_templates": workflow_template_tools.list_templates,
+    "get_template": workflow_template_tools.get_template,
+    "save_template": workflow_template_tools.save_template,
+    "delete_template": workflow_template_tools.delete_template,
+    "validate_template": workflow_template_tools.validate_template,
+    "execute_template": workflow_template_tools.execute_template,
+    "create_template_from_history": workflow_template_tools.create_template_from_history,
+    # 云平台集成工具
+    "list_cloud_providers": cloud_tools.list_cloud_providers,
+    "configure_cloud": cloud_tools.configure_cloud,
+    "get_cloud_status": cloud_tools.get_cloud_status,
+    "launch_hpc_instance": cloud_tools.launch_hpc_instance,
+    "list_hpc_instances": cloud_tools.list_hpc_instances,
+    "terminate_hpc_instances": cloud_tools.terminate_hpc_instances,
+    "submit_cloud_job": cloud_tools.submit_cloud_job,
+    "get_cloud_job_status": cloud_tools.get_cloud_job_status,
+    "upload_to_cloud_storage": cloud_tools.upload_to_cloud_storage,
+    "download_from_cloud_storage": cloud_tools.download_from_cloud_storage,
+    "estimate_cloud_cost": cloud_tools.estimate_cloud_cost,
 }
 
 # ---------------------------------------------------------------------------
@@ -4073,7 +4111,7 @@ _TEST_DATA_TOOL_NAMES: frozenset[str] = frozenset({
     "list_test_data", "list_test_projects", "export_test_report",
 })
 
-# Main-Agent 保留的工具（跨软件协调 + 知识检索 + 技能加载）
+# Main-Agent 保留的工具（跨软件协调 + 知识检索 + 技能加载 + 新功能）
 _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
     "save_project", "open_project", "close_project", "list_designs", "copy_design",
@@ -4083,6 +4121,20 @@ _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "use_skill",
     # 设计方案数据库
     "save_design_result", "list_design_results", "get_design_result", "compare_design_results",
+    # WebGL 3D可视化工具
+    "start_webgl_viewer", "stop_webgl_viewer", "export_model_to_gltf",
+    "create_simulation_animation", "get_viewer_status",
+    # CAD导入工具
+    "import_cad_file", "import_step_file", "import_stl_file", "convert_cad_format",
+    "list_supported_cad_formats", "check_cad_file", "batch_import_cad_files",
+    # 仿真流程模板工具
+    "list_templates", "get_template", "save_template", "delete_template",
+    "validate_template", "execute_template", "create_template_from_history",
+    # 云平台集成工具
+    "list_cloud_providers", "configure_cloud", "get_cloud_status",
+    "launch_hpc_instance", "list_hpc_instances", "terminate_hpc_instances",
+    "submit_cloud_job", "get_cloud_job_status", "upload_to_cloud_storage",
+    "download_from_cloud_storage", "estimate_cloud_cost",
 })
 
 
