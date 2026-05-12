@@ -32,6 +32,14 @@ from tools import (
     ev_powertrain_tools,
     nvh_tools,
     cost_tools,
+    crash_tools,
+    vehicle_cfd_tools,
+    fatigue_tools,
+    vehicle_dynamics_tools,
+    vehicle_structural_tools,
+    advanced_meshing_tools,
+    vehicle_nvh_tools,
+    test_data_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -247,6 +255,101 @@ TOOL_REGISTRY: dict[str, callable] = {
     "estimate_motor_cost": cost_tools.estimate_motor_cost,
     "get_default_material_prices": cost_tools.get_default_material_prices,
     "compare_magnet_cost": cost_tools.compare_magnet_cost,
+    # LS-DYNA 整车碰撞安全仿真工具（PyDyna）
+    "create_crash_deck": crash_tools.create_crash_deck,
+    "load_vehicle_model": crash_tools.load_vehicle_model,
+    "add_crash_material": crash_tools.add_crash_material,
+    "add_crash_section": crash_tools.add_crash_section,
+    "add_crash_part": crash_tools.add_crash_part,
+    "add_crash_contact": crash_tools.add_crash_contact,
+    "add_rigid_wall": crash_tools.add_rigid_wall,
+    "setup_frontal_crash": crash_tools.setup_frontal_crash,
+    "setup_side_crash": crash_tools.setup_side_crash,
+    "setup_rear_crash": crash_tools.setup_rear_crash,
+    "setup_pedestrian_protection": crash_tools.setup_pedestrian_protection,
+    "add_initial_velocity": crash_tools.add_initial_velocity,
+    "add_gravity_load": crash_tools.add_gravity_load,
+    "list_deck_keywords": crash_tools.list_deck_keywords,
+    "export_crash_model": crash_tools.export_crash_model,
+    "run_crash_simulation": crash_tools.run_crash_simulation,
+    "get_crash_results": crash_tools.get_crash_results,
+    "get_dummy_injury_criteria": crash_tools.get_dummy_injury_criteria,
+    "disconnect_crash_solver": crash_tools.disconnect_crash_solver,
+    # 整车 CFD 仿真工具（PyFluent）
+    "connect_vehicle_cfd": vehicle_cfd_tools.connect_vehicle_cfd,
+    "load_vehicle_cfd_mesh": vehicle_cfd_tools.load_vehicle_cfd_mesh,
+    "setup_external_aero": vehicle_cfd_tools.setup_external_aero,
+    "setup_battery_thermal_cfd": vehicle_cfd_tools.setup_battery_thermal_cfd,
+    "setup_engine_bay_thermal": vehicle_cfd_tools.setup_engine_bay_thermal,
+    "define_vehicle_cfd_boundaries": vehicle_cfd_tools.define_vehicle_cfd_boundaries,
+    "run_vehicle_cfd_simulation": vehicle_cfd_tools.run_vehicle_cfd_simulation,
+    "get_aero_coefficients": vehicle_cfd_tools.get_aero_coefficients,
+    "get_thermal_results": vehicle_cfd_tools.get_thermal_results,
+    "export_vehicle_cfd_results": vehicle_cfd_tools.export_vehicle_cfd_results,
+    "close_vehicle_cfd": vehicle_cfd_tools.close_vehicle_cfd,
+    # 疲劳耐久仿真工具
+    "connect_fatigue_solver": fatigue_tools.connect_fatigue_solver,
+    "load_fatigue_model": fatigue_tools.load_fatigue_model,
+    "load_structural_results": fatigue_tools.load_structural_results,
+    "define_sn_curve": fatigue_tools.define_sn_curve,
+    "define_en_curve": fatigue_tools.define_en_curve,
+    "define_load_spectrum": fatigue_tools.define_load_spectrum,
+    "setup_mean_stress_correction": fatigue_tools.setup_mean_stress_correction,
+    "run_fatigue_analysis": fatigue_tools.run_fatigue_analysis,
+    "get_fatigue_results": fatigue_tools.get_fatigue_results,
+    "disconnect_fatigue_solver": fatigue_tools.disconnect_fatigue_solver,
+    # 整车动力学 VD 仿真工具
+    "connect_vd_solver": vehicle_dynamics_tools.connect_vd_solver,
+    "define_vehicle_params": vehicle_dynamics_tools.define_vehicle_params,
+    "setup_steady_state_cornering": vehicle_dynamics_tools.setup_steady_state_cornering,
+    "setup_step_steering": vehicle_dynamics_tools.setup_step_steering,
+    "setup_random_road": vehicle_dynamics_tools.setup_random_road,
+    "setup_braking_analysis": vehicle_dynamics_tools.setup_braking_analysis,
+    "setup_suspension_kinematics": vehicle_dynamics_tools.setup_suspension_kinematics,
+    "run_vd_simulation": vehicle_dynamics_tools.run_vd_simulation,
+    "get_vd_results": vehicle_dynamics_tools.get_vd_results,
+    "disconnect_vd_solver": vehicle_dynamics_tools.disconnect_vd_solver,
+    # 整车结构强度仿真工具
+    "connect_structural_solver": vehicle_structural_tools.connect_structural_solver,
+    "load_structural_model": vehicle_structural_tools.load_structural_model,
+    "define_structural_material": vehicle_structural_tools.define_structural_material,
+    "setup_boundary_conditions": vehicle_structural_tools.setup_boundary_conditions,
+    "apply_bending_load": vehicle_structural_tools.apply_bending_load,
+    "apply_torsion_load": vehicle_structural_tools.apply_torsion_load,
+    "apply_quasi_static_loads": vehicle_structural_tools.apply_quasi_static_loads,
+    "run_structural_analysis": vehicle_structural_tools.run_structural_analysis,
+    "get_structural_results": vehicle_structural_tools.get_structural_results,
+    "disconnect_structural_solver": vehicle_structural_tools.disconnect_structural_solver,
+    # 高级网格划分工具
+    "launch_meshing_session": advanced_meshing_tools.launch_meshing_session,
+    "import_geometry_for_meshing": advanced_meshing_tools.import_geometry_for_meshing,
+    "generate_tetrahedral_mesh": advanced_meshing_tools.generate_tetrahedral_mesh,
+    "generate_hex_mesh": advanced_meshing_tools.generate_hex_mesh,
+    "generate_polyhedral_mesh": advanced_meshing_tools.generate_polyhedral_mesh,
+    "check_mesh_quality": advanced_meshing_tools.check_mesh_quality,
+    "refine_mesh_locally": advanced_meshing_tools.refine_mesh_locally,
+    "export_mesh": advanced_meshing_tools.export_mesh,
+    "close_meshing_session": advanced_meshing_tools.close_meshing_session,
+    # 整车 NVH 仿真工具
+    "connect_vehicle_nvh_solver": vehicle_nvh_tools.connect_vehicle_nvh_solver,
+    "load_vehicle_nvh_model": vehicle_nvh_tools.load_vehicle_nvh_model,
+    "define_nvh_materials": vehicle_nvh_tools.define_nvh_materials,
+    "setup_vehicle_modal_analysis": vehicle_nvh_tools.setup_vehicle_modal_analysis,
+    "setup_frequency_response": vehicle_nvh_tools.setup_frequency_response,
+    "setup_acoustic_analysis": vehicle_nvh_tools.setup_acoustic_analysis,
+    "run_vehicle_nvh_simulation": vehicle_nvh_tools.run_vehicle_nvh_simulation,
+    "get_vehicle_nvh_results": vehicle_nvh_tools.get_vehicle_nvh_results,
+    "disconnect_vehicle_nvh_solver": vehicle_nvh_tools.disconnect_vehicle_nvh_solver,
+    # 试验数据管理工具
+    "create_test_project": test_data_tools.create_test_project,
+    "import_test_data": test_data_tools.import_test_data,
+    "describe_nvh_test": test_data_tools.describe_nvh_test,
+    "describe_vd_test": test_data_tools.describe_vd_test,
+    "describe_durability_test": test_data_tools.describe_durability_test,
+    "correlate_cae_test": test_data_tools.correlate_cae_test,
+    "list_test_data": test_data_tools.list_test_data,
+    "list_test_projects": test_data_tools.list_test_projects,
+    "export_test_report": test_data_tools.export_test_report,
 }
 
 # ---------------------------------------------------------------------------
@@ -3220,6 +3323,580 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # -----------------------------------------------------------------------
+    # LS-DYNA 整车碰撞安全仿真工具定义（PyDyna）
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "create_crash_deck",
+            "description": "创建新的 LS-DYNA 碰撞仿真 Deck 容器，设置仿真标题和单位制。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "仿真标题"},
+                    "units": {"type": "string", "enum": ["mm_ton_s", "m_kg_s", "mm_kg_s"], "description": "单位制"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_vehicle_model",
+            "description": "加载已有的整车碰撞 LS-DYNA Keyword 文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_path": {"type": "string", "description": "模型文件路径"},
+                    "expand_includes": {"type": "boolean", "description": "是否展开 Include 引用"},
+                },
+                "required": ["model_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_crash_material",
+            "description": "向碰撞 Deck 添加材料模型（弹性、弹塑性、刚性等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mid": {"type": "integer", "description": "材料 ID"},
+                    "material_type": {"type": "string", "enum": ["elastic", "piecewise_linear_plasticity", "rigid", "johnson_cook"], "description": "材料类型"},
+                    "density": {"type": "number", "description": "密度"},
+                    "youngs_modulus": {"type": "number", "description": "杨氏模量（MPa）"},
+                    "poisson_ratio": {"type": "number", "description": "泊松比"},
+                },
+                "required": ["mid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_crash_section",
+            "description": "向碰撞 Deck 添加截面属性。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "secid": {"type": "integer", "description": "截面 ID"},
+                    "section_type": {"type": "string", "enum": ["shell", "solid", "beam"], "description": "截面类型"},
+                },
+                "required": ["secid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_crash_contact",
+            "description": "向碰撞 Deck 添加接触定义。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_type": {"type": "string", "enum": ["automatic_single_surface", "automatic_surface_to_surface", "automatic_nodes_to_surface", "eroding_single_surface", "tied_surface_to_surface"], "description": "接触类型"},
+                    "fs": {"type": "number", "description": "静摩擦系数"},
+                    "fd": {"type": "number", "description": "动摩擦系数"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_rigid_wall",
+            "description": "向碰撞 Deck 添加刚性壁障。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "wall_id": {"type": "integer", "description": "壁障 ID"},
+                    "wall_type": {"type": "string", "enum": ["planar", "moving"], "description": "壁障类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_frontal_crash",
+            "description": "设置正面碰撞仿真工况控制卡片。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "crash_type": {"type": "string", "enum": ["full_frontal", "offset", "small_overlap"], "description": "碰撞类型"},
+                    "impact_speed_kmh": {"type": "number", "description": "碰撞速度（km/h）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_side_crash",
+            "description": "设置侧面碰撞仿真工况控制卡片。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "crash_type": {"type": "string", "enum": ["mdb", "pole"], "description": "碰撞类型"},
+                    "impact_speed_kmh": {"type": "number", "description": "碰撞速度（km/h）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_rear_crash",
+            "description": "设置后部碰撞仿真工况控制卡片。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "impact_speed_kmh": {"type": "number", "description": "碰撞速度（km/h）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_pedestrian_protection",
+            "description": "设置行人保护仿真工况控制卡片。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "test_region": {"type": "string", "enum": ["headform", "legform", "upper_leg"], "description": "测试区域"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_initial_velocity",
+            "description": "向碰撞 Deck 添加初始速度定义。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vx": {"type": "number", "description": "X 方向速度（mm/s）"},
+                    "vy": {"type": "number", "description": "Y 方向速度（mm/s）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_crash_model",
+            "description": "将碰撞 Deck 导出为 LS-DYNA Keyword 文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出文件路径"},
+                },
+                "required": ["output_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_crash_simulation",
+            "description": "调用 LS-DYNA 求解器运行碰撞仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_file": {"type": "string", "description": "输入 .k 文件路径"},
+                    "working_dir": {"type": "string", "description": "工作目录"},
+                },
+                "required": ["input_file"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_crash_results",
+            "description": "提取碰撞仿真结果（能量、加速度、变形）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_type": {"type": "string", "enum": ["energy", "acceleration", "deformation", "force"], "description": "结果类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dummy_injury_criteria",
+            "description": "提取碰撞仿真中假人损伤指标。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "test_type": {"type": "string", "enum": ["frontal", "side", "rear", "pedestrian"], "description": "碰撞类型"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 整车 CFD 仿真工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_vehicle_cfd",
+            "description": "启动 Fluent 会话用于整车 CFD 仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["solver", "meshing"], "description": "模式"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_vehicle_cfd_mesh",
+            "description": "加载整车 CFD 计算域网格。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mesh_path": {"type": "string", "description": "网格文件路径"},
+                },
+                "required": ["mesh_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_external_aero",
+            "description": "设置整车空气动力学分析。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "wind_speed_m_s": {"type": "number", "description": "来流风速（m/s）"},
+                    "reference_area_m2": {"type": "number", "description": "参考面积（m²）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_battery_thermal_cfd",
+            "description": "设置电池包液冷 CFD 热仿真。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "inlet_temp_C": {"type": "number", "description": "入口温度（°C）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_vehicle_cfd_simulation",
+            "description": "运行整车 CFD 仿真。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_aero_coefficients",
+            "description": "提取整车空气动力学系数。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 疲劳耐久仿真工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_fatigue_solver",
+            "description": "连接到疲劳分析求解器。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "define_sn_curve",
+            "description": "定义 S-N 曲线用于高周疲劳分析。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "material_id": {"type": "integer", "description": "材料 ID"},
+                },
+                "required": ["material_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "define_load_spectrum",
+            "description": "定义疲劳载荷谱。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spectrum_type": {"type": "string", "enum": ["constant_amplitude", "variable_amplitude", "block"], "description": "载荷谱类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_fatigue_analysis",
+            "description": "运行疲劳寿命分析。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "analysis_method": {"type": "string", "enum": ["stress_life", "strain_life"], "description": "分析方法"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fatigue_results",
+            "description": "提取疲劳分析结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_type": {"type": "string", "enum": ["life", "damage", "safety_factor"], "description": "结果类型"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 整车动力学 VD 仿真工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_vd_solver",
+            "description": "连接到整车动力学仿真求解器。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "define_vehicle_params",
+            "description": "定义整车动力学参数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vehicle_mass_kg": {"type": "number", "description": "整车质量（kg）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_steady_state_cornering",
+            "description": "设置稳态回转分析。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_vd_simulation",
+            "description": "运行整车动力学仿真。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_vd_results",
+            "description": "提取整车动力学仿真结果。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 整车结构强度仿真工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_structural_solver",
+            "description": "连接到结构分析求解器。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_structural_analysis",
+            "description": "运行整车结构强度分析。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "analysis_type": {"type": "string", "enum": ["static", "quasi_static", "buckling"], "description": "分析类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_structural_results",
+            "description": "提取结构分析结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_type": {"type": "string", "enum": ["stress", "strain", "displacement"], "description": "结果类型"},
+                },
+            },
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 高级网格划分工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "launch_meshing_session",
+            "description": "启动网格划分会话。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mesher_type": {"type": "string", "enum": ["fluent_meshing", "ansys_meshing"], "description": "网格器类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_tetrahedral_mesh",
+            "description": "生成四面体网格。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_hex_mesh",
+            "description": "生成六面体网格。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_mesh_quality",
+            "description": "检查网格质量。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 整车 NVH 仿真工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "connect_vehicle_nvh_solver",
+            "description": "连接到整车 NVH 仿真求解器。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_vehicle_modal_analysis",
+            "description": "设置整车模态分析。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_vehicle_nvh_simulation",
+            "description": "运行整车 NVH 仿真。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_vehicle_nvh_results",
+            "description": "提取整车 NVH 仿真结果。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # -----------------------------------------------------------------------
+    # 试验数据管理工具定义
+    # -----------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "create_test_project",
+            "description": "创建试验数据管理项目。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "项目名称"},
+                },
+                "required": ["project_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_test_data",
+            "description": "导入试验数据文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "数据文件路径"},
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "correlate_cae_test",
+            "description": "CAE 仿真结果与试验数据相关性分析。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cae_result_path": {"type": "string", "description": "CAE 结果文件路径"},
+                    "test_data_path": {"type": "string", "description": "试验数据文件路径"},
+                },
+                "required": ["cae_result_path", "test_data_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_test_report",
+            "description": "导出试验数据报告。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出路径"},
+                },
+                "required": ["output_path"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -3332,6 +4009,70 @@ _COST_TOOL_NAMES: frozenset[str] = frozenset({
     "estimate_motor_cost", "get_default_material_prices", "compare_magnet_cost",
 })
 
+# LS-DYNA 整车碰撞安全仿真工具
+_CRASH_TOOL_NAMES: frozenset[str] = frozenset({
+    "create_crash_deck", "load_vehicle_model", "add_crash_material",
+    "add_crash_section", "add_crash_contact", "add_rigid_wall",
+    "setup_frontal_crash", "setup_side_crash", "setup_rear_crash",
+    "setup_pedestrian_protection", "add_initial_velocity", "add_gravity_load",
+    "list_deck_keywords", "export_crash_model", "run_crash_simulation",
+    "get_crash_results", "get_dummy_injury_criteria", "disconnect_crash_solver",
+})
+
+# 整车 CFD 仿真工具
+_VEHICLE_CFD_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_vehicle_cfd", "load_vehicle_cfd_mesh", "setup_external_aero",
+    "setup_battery_thermal_cfd", "setup_engine_bay_thermal",
+    "define_vehicle_cfd_boundaries", "run_vehicle_cfd_simulation",
+    "get_aero_coefficients", "get_thermal_results", "export_vehicle_cfd_results",
+    "close_vehicle_cfd",
+})
+
+# 疲劳耐久仿真工具
+_FATIGUE_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_fatigue_solver", "load_fatigue_model", "load_structural_results",
+    "define_sn_curve", "define_en_curve", "define_load_spectrum",
+    "setup_mean_stress_correction", "run_fatigue_analysis", "get_fatigue_results",
+    "disconnect_fatigue_solver",
+})
+
+# 整车动力学 VD 仿真工具
+_VD_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_vd_solver", "define_vehicle_params", "setup_steady_state_cornering",
+    "setup_step_steering", "setup_random_road", "setup_braking_analysis",
+    "setup_suspension_kinematics", "run_vd_simulation", "get_vd_results",
+    "disconnect_vd_solver",
+})
+
+# 整车结构强度仿真工具
+_VSTRUCT_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_structural_solver", "load_structural_model", "define_structural_material",
+    "setup_boundary_conditions", "apply_bending_load", "apply_torsion_load",
+    "apply_quasi_static_loads", "run_structural_analysis", "get_structural_results",
+    "disconnect_structural_solver",
+})
+
+# 高级网格划分工具
+_MESHING_TOOL_NAMES: frozenset[str] = frozenset({
+    "launch_meshing_session", "import_geometry_for_meshing", "generate_tetrahedral_mesh",
+    "generate_hex_mesh", "generate_polyhedral_mesh", "check_mesh_quality",
+    "refine_mesh_locally", "export_mesh", "close_meshing_session",
+})
+
+# 整车 NVH 仿真工具
+_VEHICLE_NVH_TOOL_NAMES: frozenset[str] = frozenset({
+    "connect_vehicle_nvh_solver", "load_vehicle_nvh_model", "define_nvh_materials",
+    "setup_vehicle_modal_analysis", "setup_frequency_response", "setup_acoustic_analysis",
+    "run_vehicle_nvh_simulation", "get_vehicle_nvh_results", "disconnect_vehicle_nvh_solver",
+})
+
+# 试验数据管理工具
+_TEST_DATA_TOOL_NAMES: frozenset[str] = frozenset({
+    "create_test_project", "import_test_data", "describe_nvh_test",
+    "describe_vd_test", "describe_durability_test", "correlate_cae_test",
+    "list_test_data", "list_test_projects", "export_test_report",
+})
+
 # Main-Agent 保留的工具（跨软件协调 + 知识检索 + 技能加载）
 _MAIN_TOOL_NAMES: frozenset[str] = frozenset({
     "link_maxwell_to_icepak", "run_em_thermal_iteration", "import_thermal_to_mechanical",
@@ -3386,6 +4127,38 @@ NVH_TOOL_REGISTRY = _filter_registry(_NVH_TOOL_NAMES)
 
 COST_TOOL_DEFINITIONS = _filter_definitions(_COST_TOOL_NAMES)
 COST_TOOL_REGISTRY = _filter_registry(_COST_TOOL_NAMES)
+
+# LS-DYNA 整车碰撞安全仿真工具导出
+CRASH_TOOL_DEFINITIONS = _filter_definitions(_CRASH_TOOL_NAMES)
+CRASH_TOOL_REGISTRY = _filter_registry(_CRASH_TOOL_NAMES)
+
+# 整车 CFD 仿真工具导出
+VEHICLE_CFD_TOOL_DEFINITIONS = _filter_definitions(_VEHICLE_CFD_TOOL_NAMES)
+VEHICLE_CFD_TOOL_REGISTRY = _filter_registry(_VEHICLE_CFD_TOOL_NAMES)
+
+# 疲劳耐久仿真工具导出
+FATIGUE_TOOL_DEFINITIONS = _filter_definitions(_FATIGUE_TOOL_NAMES)
+FATIGUE_TOOL_REGISTRY = _filter_registry(_FATIGUE_TOOL_NAMES)
+
+# 整车动力学 VD 仿真工具导出
+VD_TOOL_DEFINITIONS = _filter_definitions(_VD_TOOL_NAMES)
+VD_TOOL_REGISTRY = _filter_registry(_VD_TOOL_NAMES)
+
+# 整车结构强度仿真工具导出
+VSTRUCT_TOOL_DEFINITIONS = _filter_definitions(_VSTRUCT_TOOL_NAMES)
+VSTRUCT_TOOL_REGISTRY = _filter_registry(_VSTRUCT_TOOL_NAMES)
+
+# 高级网格划分工具导出
+MESHING_TOOL_DEFINITIONS = _filter_definitions(_MESHING_TOOL_NAMES)
+MESHING_TOOL_REGISTRY = _filter_registry(_MESHING_TOOL_NAMES)
+
+# 整车 NVH 仿真工具导出
+VEHICLE_NVH_TOOL_DEFINITIONS = _filter_definitions(_VEHICLE_NVH_TOOL_NAMES)
+VEHICLE_NVH_TOOL_REGISTRY = _filter_registry(_VEHICLE_NVH_TOOL_NAMES)
+
+# 试验数据管理工具导出
+TEST_DATA_TOOL_DEFINITIONS = _filter_definitions(_TEST_DATA_TOOL_NAMES)
+TEST_DATA_TOOL_REGISTRY = _filter_registry(_TEST_DATA_TOOL_NAMES)
 
 
 def build_use_skill_definition() -> dict:
@@ -3447,7 +4220,15 @@ DELEGATE_TOOL_DEFINITION = {
             "reporting（报告生成）、"
             "ev_powertrain（EV电驱系统联仿：电池+控制器+电机）、"
             "nvh（NVH噪声振动：电磁力→结构→声学链路）、"
-            "cost（电机成本估算）。"
+            "cost（电机成本估算）、"
+            "crash（整车碰撞安全仿真：LS-DYNA正面/侧面/后部碰撞/行人保护）、"
+            "vehicle_cfd（整车CFD仿真：外流场空气动力学/电池热管理/机舱热分析）、"
+            "fatigue（疲劳耐久仿真：S-N曲线/E-N曲线/载荷谱分析）、"
+            "vehicle_dynamics（整车动力学VD仿真：操稳性/平顺性/制动性能）、"
+            "vehicle_structural（整车结构强度仿真：静力学/准静态/屈曲分析）、"
+            "advanced_meshing（高级网格划分：结构网格/流体网格/质量检查）、"
+            "vehicle_nvh（整车NVH仿真：模态分析/频率响应/声学分析）、"
+            "test_data（试验数据管理：NVH试验/VD试验/耐久试验数据管理）。"
         ),
         "parameters": {
             "type": "object",
@@ -3458,6 +4239,9 @@ DELEGATE_TOOL_DEFINITION = {
                         "maxwell", "icepak", "fluent", "mapdl",
                         "motorcad", "optimization", "reporting",
                         "ev_powertrain", "nvh", "cost",
+                        "crash", "vehicle_cfd", "fatigue",
+                        "vehicle_dynamics", "vehicle_structural",
+                        "advanced_meshing", "vehicle_nvh", "test_data",
                     ],
                     "description": "目标 Sub-Agent 名称",
                 },

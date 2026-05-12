@@ -1,22 +1,15 @@
 # AnsysAgent
 
-> 还在为 Ansys 那一套繁琐操作抓耳挠腮？Maxwell 电磁仿真让你怀疑人生？
-> 敏感性分析一跑就是几小时，优化参数多到数不清？
-> 别慌——**装好 Ansys，配上这个 Agent，一句话搞定你的所有烦恼。**
-> _"以前要点三天的仿真，现在只需要打一行字。"_
-
----
-
-基于多 LLM 提供商 + 多 Agent 调度 + PyAEDT / PyFluent / PyMotorCAD / PyMAPDL 的电机全流程仿真 AI 助手，覆盖从解析法快速初设计到电磁、热、流体、结构、NVH、驱动器联仿、参数优化和自动化报告的完整端到端自动化流水线。
+基于多 LLM 提供商 + 多 Agent 调度 + PyAEDT / PyFluent / PyMotorCAD / PyMAPDL / PyDyna 的全领域 Ansys 仿真 AI 助手，覆盖从电机设计到整车级仿真的完整端到端自动化流水线，包括：电磁仿真、热分析、流体力学、结构强度、NVH、碰撞安全、疲劳耐久、整车动力学、网格划分和试验数据管理。
 
 ## 功能特性
 
 - **自然语言驱动**：用中文描述需求，Main Agent 自动路由到专业 Sub-Agent 执行
 - **多 LLM 提供商**：运行时通过 `/config` 切换 DeepSeek / ChatGPT / Qwen / Gemini / GLM / MiniMax，并支持自动故障回退
-- **多 Agent 架构**：内置 `maxwell` / `icepak` / `fluent` / `mapdl` / `motorcad` / `optimization` / `reporting` 七类专业代理
+- **多 Agent 架构**：内置 18 个专业代理，覆盖电机设计、整车碰撞、CFD、NVH、疲劳、动力学、结构、网格、试验数据等全领域
 - **多轮对话**：完整上下文保持，支持追加修改
 - **流式输出**：实时显示回复内容，工具调用实时可见
-- **模块化工具**：92+ 内置工具覆盖电机仿真全流程，并支持通过 MCP 动态扩展额外工具
+- **模块化工具**：180+ 内置工具覆盖 Ansys 全领域仿真，并支持通过 MCP 动态扩展额外工具
 - **本地知识增强（RAG）**：自动索引内置文档和用户扩展知识目录，支持 PDF / PPTX / Notebook / Python / Markdown 等格式
 - **技能与规则**：支持 `/rules` 管理自定义系统规则，并支持 `skills/` 目录下的专业流程技能
 - **持久记忆（Memory）**：支持保存用户偏好、项目背景、外部参考入口等非代码型长期上下文
@@ -24,6 +17,7 @@
 
 ## 完整仿真流水线
 
+### 电机设计流程
 ```
 Motor-CAD 解析初设计 → export_motorcad_to_maxwell
         ↓                        ↓
@@ -40,6 +34,25 @@ MAPDL 热应力/NVH      Mechanical 结构分析 ←── import_thermal_to_mec
 optiSLang 多目标优化 → Fluent CFD 冷却分析
         ↓
 DPF 后处理（应力/温度场提取）→ 自动化 HTML/PDF 报告
+```
+
+### 整车级仿真流程
+```
+高级网格划分（结构/流体）→ 整车 CFD（外流场/电池热管理）
+        ↓
+整车结构强度分析（静力学/准静态/屈曲）
+        ↓
+整车 NVH 仿真（模态/频率响应/声学）
+        ↓
+整车动力学 VD 仿真（操稳性/平顺性/制动）
+        ↓
+疲劳耐久分析（S-N/E-N 曲线/载荷谱）
+        ↓
+整车碰撞安全仿真（LS-DYNA 正面/侧面/后部/行人保护）
+        ↓
+试验数据管理（NVH/VD/耐久试验数据 + CAE 相关性分析）
+        ↓
+自动化 HTML/PDF 报告
 ```
 
 ## 工具模块
@@ -66,7 +79,7 @@ DPF 后处理（应力/温度场提取）→ 自动化 HTML/PDF 报告
 | RMXprt 初设计 | `rmxprt_tools.py` | 4 | 解析法快速建模、解析仿真、导出到 Maxwell |
 | 场云图可视化 | `visualization_tools.py` | 3 | 创建/导出磁密/温度等场量云图 |
 
-### 扩展仿真（PyMotorCAD / PyMAPDL / PyDPF）
+### 扩展仿真（PyMotorCAD / PyMAPDL / PyDPF / PyDyna）
 
 | 模块 | 文件 | 工具数 | 主要功能 |
 |------|------|--------|---------|
@@ -75,7 +88,20 @@ DPF 后处理（应力/温度场提取）→ 自动化 HTML/PDF 报告
 | DPF 后处理 | `dpf_tools.py` | 6 | 加载 .rst 文件，提取应力/温度/位移场，导出 CSV |
 | 自动化报告 | `dynamic_reporting_tools.py` | 9 | 文本/表格/图片插入，ADR 或内置 HTML 双轨输出 |
 
-**工具总计：92 个**
+### 整车级仿真（PyDyna / PyFluent / PyMAPDL）
+
+| 模块 | 文件 | 工具数 | 主要功能 |
+|------|------|--------|---------|
+| 碰撞安全仿真 | `crash_tools.py` | 18 | LS-DYNA 正面/侧面/后部碰撞、行人保护、假人损伤指标 |
+| 整车 CFD | `vehicle_cfd_tools.py` | 11 | 外流场空气动力学、电池热管理、机舱热分析 |
+| 疲劳耐久 | `fatigue_tools.py` | 9 | S-N 曲线、E-N 曲线、载荷谱、平均应力修正 |
+| 整车动力学 | `vehicle_dynamics_tools.py` | 9 | 操稳性、平顺性、制动性能、悬架运动学 |
+| 整车结构强度 | `vehicle_structural_tools.py` | 9 | 静力学、准静态、屈曲分析、弯曲/扭转载荷 |
+| 高级网格划分 | `advanced_meshing_tools.py` | 9 | 四面体/六面体/多面体网格、质量检查、局部细化 |
+| 整车 NVH | `vehicle_nvh_tools.py` | 9 | 整车模态、频率响应、声学分析 |
+| 试验数据管理 | `test_data_tools.py` | 9 | NVH/VD/耐久试验数据、CAE 相关性分析、报告导出 |
+
+**工具总计：180+ 个**
 
 ## 环境要求
 
@@ -85,6 +111,7 @@ DPF 后处理（应力/温度场提取）→ 自动化 HTML/PDF 报告
 - Ansys Motor-CAD 2024+（解析法初设计，可选）
 - Ansys MAPDL 2024+（结构/NVH 分析，可选）
 - Ansys Fluent 2023 R2+（流体分析，可选）
+- Ansys LS-DYNA 2023+（碰撞安全仿真，可选）
 
 ## 安装
 
@@ -186,6 +213,7 @@ You: /config
 
 ## 对话示例
 
+### 电机设计示例
 ```
 You: 用 Motor-CAD 快速估算一台 36 槽 6 极 PMSM，额定转速 3000rpm
   🔧 connect_motorcad → set_motorcad_geometry → run_motorcad_em_analysis
@@ -209,6 +237,39 @@ You: 对气隙宽度做多目标优化，生成完整分析报告
   🔧 connect_optislang → run_optimization
   🔧 create_report_session → add_report_section → add_table_to_report → export_report
   ✓ 最优气隙 0.9mm，转矩提升 8.3%；报告已保存至 motor_report.html
+```
+
+### 整车级仿真示例
+```
+You: 为一辆电动车进行整车正面碰撞仿真，速度 50km/h
+  🔧 create_crash_deck → load_vehicle_model → setup_frontal_crash
+  🔧 add_initial_velocity → export_crash_model → run_crash_simulation
+  ✓ 仿真完成，最大变形量 320mm，假人 HIC 值 245（满足 FMVSS 208 标准）
+
+You: 分析整车空气动力学，计算风阻系数 Cd
+  🔧 connect_vehicle_cfd → load_vehicle_cfd_mesh → setup_external_aero
+  🔧 run_vehicle_cfd_simulation → get_aero_coefficients
+  ✓ Cd=0.28，升力系数 Cl=0.12，满足设计要求
+
+You: 进行整车模态分析，提取前 20 阶固有频率
+  🔧 connect_vehicle_nvh_solver → load_vehicle_nvh_model
+  🔧 setup_vehicle_modal_analysis → run_vehicle_nvh_simulation
+  ✓ 第 1 阶弯曲模态 28.5Hz，第 1 阶扭转模态 35.2Hz
+
+You: 对车身进行疲劳耐久分析
+  🔧 connect_fatigue_solver → define_sn_curve → define_load_spectrum
+  🔧 run_fatigue_analysis → get_fatigue_results
+  ✓ 最小寿命 1.2e6 循环，最大损伤度 0.08（满足设计寿命要求）
+
+You: 进行整车稳态回转分析，评估操稳性
+  🔧 connect_vd_solver → define_vehicle_params → setup_steady_state_cornering
+  🔧 run_vd_simulation → get_vd_results
+  ✓ 侧向加速度 0.8g 时，横摆角速度 15.2°/s，侧倾角 3.5°
+
+You: 对电池包进行液冷 CFD 热仿真
+  🔧 setup_battery_thermal_cfd → define_vehicle_cfd_boundaries
+  🔧 run_vehicle_cfd_simulation → get_thermal_results
+  ✓ 最高温度 45.2°C，最大温差 5.8°C，满足热管理要求
 ```
 
 ## 本地知识库（RAG）
@@ -294,7 +355,7 @@ AnsysAgent/
 │   ├── tool_definitions.py        # 工具注册表 + OpenAI function calling 定义
 │   ├── prompt.py                  # Main Agent system prompt
 │   ├── log_server.py              # 日志查看 HTTP server（默认端口 7788）
-│   └── sub_agents/                # 10 个专业代理（含 ev_powertrain/nvh/cost）
+│   └── sub_agents/                # 18 个专业代理（含整车碰撞/CFD/NVH/疲劳/动力学/结构/网格/试验数据）
 ├── tools/
 │   ├── maxwell_tools.py           # 电磁仿真（含自定义材料/B-H曲线）
 │   ├── result_tools.py            # 结果提取（动态报告类别，含退磁校核）
@@ -319,6 +380,14 @@ AnsysAgent/
 │   ├── dynamic_reporting_tools.py # 自动化报告生成（ADR/HTML 双轨）
 │   ├── knowledge_tools.py         # 本地知识索引与检索
 │   ├── skill_tools.py             # Skill 加载工具
+│   ├── crash_tools.py             # LS-DYNA 整车碰撞安全仿真（PyDyna）
+│   ├── vehicle_cfd_tools.py       # 整车 CFD 仿真（外流场/电池热管理）
+│   ├── fatigue_tools.py           # 疲劳耐久仿真（S-N/E-N 曲线）
+│   ├── vehicle_dynamics_tools.py  # 整车动力学 VD 仿真
+│   ├── vehicle_structural_tools.py # 整车结构强度仿真
+│   ├── advanced_meshing_tools.py  # 高级网格划分（结构/流体）
+│   ├── vehicle_nvh_tools.py       # 整车 NVH 仿真
+│   ├── test_data_tools.py         # 试验数据管理
 │   └── utils.py                   # 共享辅助函数（_ok / _err）
 ├── skills/                        # 内置技能
 ├── docs/api/                      # Ansys Python 库 API 速查表 PDF
@@ -340,6 +409,7 @@ AnsysAgent/
 - `ansys-aedt-core`（Maxwell/Icepak/Circuit/RMXprt）仅支持 Windows，需本机安装 Ansys AEDT 2024
 - `ansys-motorcad-core` 需要安装 Ansys Motor-CAD 并持有许可证
 - `ansys-mapdl-core` 支持本地启动或远程 gRPC 连接，需 MAPDL 2021 R1+
+- `ansys-dyna-core`（LS-DYNA）支持 Windows/Linux，需本机安装 Ansys LS-DYNA 2023+
 - `ansys-dpf-post` 可独立后处理 .rst 文件，无需在线 MAPDL 实例
 - `dynamic_reporting_tools` 在无 ADR 许可证时自动回退到内置 HTML 模板渲染，无需额外依赖
 - Claude (Anthropic) 因 API 格式不兼容 OpenAI 客户端已移除，如需使用请自行实现 Anthropic 适配层

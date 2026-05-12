@@ -113,8 +113,7 @@ def save_simulation_case(
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     tag_str = ", ".join(tags) if tags else ""
-    NL = "
-"
+    NL = "\n"
 
     # 构建 Markdown 案例内容
     lines = [
@@ -133,8 +132,7 @@ def save_simulation_case(
         lines.extend(["", f"## 标签{NL}{tag_str}"])
     lines.extend(["", f"---{NL}*案例记录时间: {timestamp}*"])
 
-    content_md = "
-".join(lines)
+    content_md = "\n".join(lines)
 
     description = f"仿真案例: {task_description[:80]}" + (f" [{tag_str}]" if tag_str else "")
 

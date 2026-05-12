@@ -41,6 +41,9 @@ from agent.sub_agents import (
     MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
     MotorCADAgent, OptimizationAgent, ReportingAgent,
     EVPowertrainAgent, NVHAgent, CostAgent,
+    CrashAgent, VehicleCFDAgent, FatigueAgent,
+    VehicleDynamicsAgent, VehicleStructuralAgent,
+    AdvancedMeshingAgent, VehicleNVHAgent, TestDataAgent,
 )
 from rag.config import DEFAULT_DOC_PATHS, DEFAULT_INDEX_PATH
 from rag.service import build_index, search_index
@@ -170,6 +173,9 @@ class ChatAgent:
             MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
             MotorCADAgent, OptimizationAgent, ReportingAgent,
             EVPowertrainAgent, NVHAgent, CostAgent,
+            CrashAgent, VehicleCFDAgent, FatigueAgent,
+            VehicleDynamicsAgent, VehicleStructuralAgent,
+            AdvancedMeshingAgent, VehicleNVHAgent, TestDataAgent,
         ]
         names = []
         for cls in sub_agent_classes:

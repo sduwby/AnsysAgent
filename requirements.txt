@@ -10,6 +10,9 @@ ansys-motorcad-core>=0.7.0
 # Ansys PyMAPDL - MAPDL structural, thermal stress, NVH harmonic analysis
 ansys-mapdl-core>=0.68.0
 
+# Ansys PyDyna - LS-DYNA explicit dynamics Python interface (crash simulation)
+ansys-dyna-core>=0.8.0
+
 # Ansys PyDPF-Post - Simulation post-processing
 ansys-dpf-post>=0.7.0
 

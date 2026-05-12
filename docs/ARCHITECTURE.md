@@ -2,7 +2,7 @@
 
 ## 概览
 
-AnsysAgent 是一个基于多 LLM 提供商 + 多 Agent 调度的 Ansys 仿真 AI 助手。用户输入自然语言，Main Agent 理解意图并通过工具调用或委托给专业 Sub-Agent 执行具体仿真操作。
+AnsysAgent 是一个基于多 LLM 提供商 + 多 Agent 调度的全领域 Ansys 仿真 AI 助手。用户输入自然语言，Main Agent 理解意图并通过工具调用或委托给专业 Sub-Agent 执行具体仿真操作，覆盖电机设计、整车碰撞、CFD、NVH、疲劳、动力学、结构、网格和试验数据管理等全领域。
 
 ```
 用户输入 (CLI)
@@ -12,7 +12,7 @@ AnsysAgent 是一个基于多 LLM 提供商 + 多 Agent 调度的 Ansys 仿真 A
 │               ChatAgent (Main Agent)        │
 │  ┌─────────┐  ┌──────────┐  ┌───────────┐  │
 │  │ LLM 客户 │  │ RAG 检索  │  │ 工具注册表 │  │
-│  │ + 回退链 │  │ 关键词触发 │  │ 110+ 工具  │  │
+│  │ + 回退链 │  │ 关键词触发 │  │ 180+ 工具  │  │
 │  └─────────┘  └──────────┘  └───────────┘  │
 │  ┌──────────────────────────────────────┐   │
 │  │ OmAgent Workflow Runtime             │   │
@@ -26,7 +26,7 @@ AnsysAgent 是一个基于多 LLM 提供商 + 多 Agent 调度的 Ansys 仿真 A
 │  Sub-Agent 注册表 {name → SubAgentBase}     │
 └──┬──────┬───────┬──────┬───────┬────────┬──┘
    │      │       │      │       │        │
-maxwell icepak fluent mapdl motorcad optimization reporting
+maxwell icepak fluent mapdl motorcad optimization reporting ev_powertrain nvh cost crash vehicle_cfd fatigue vehicle_dynamics vehicle_structural advanced_meshing vehicle_nvh test_data
    │
    ▼
 SubAgent Workflow（OmAgent 风格 ToolLoopNode）
@@ -37,9 +37,9 @@ SubAgent Workflow（OmAgent 风格 ToolLoopNode）
 
 ## 功能介绍
 
-### 自然语言驱动的电机仿真
+### 自然语言驱动的全领域仿真
 
-用户用中文描述仿真需求，系统自动分解任务、路由到专业子 Agent、依次调用 Ansys API，最终返回结构化结果。无需手动操作 AEDT GUI，无需记忆繁琐的 PyAEDT API 名称。
+用户用中文描述仿真需求，系统自动分解任务、路由到专业子 Agent、依次调用 Ansys API，最终返回结构化结果。无需手动操作 Ansys GUI，无需记忆繁琐的 Python API 名称。
 
 ```
 用户: "帮我建一个36槽6极PMSM，外径150mm，然后跑磁静态仿真，提取转矩"
@@ -47,6 +47,12 @@ SubAgent Workflow（OmAgent 风格 ToolLoopNode）
   create_2d_motor_model → set_stator_slots(36) → set_poles(6)
   → assign_material → create_winding → setup_mesh
   → run_simulation → get_torque_result
+
+用户: "为电动车进行正面碰撞仿真，速度50km/h"
+系统自动完成：
+  create_crash_deck → load_vehicle_model → setup_frontal_crash
+  → add_initial_velocity → export_crash_model → run_crash_simulation
+  → get_crash_results → get_dummy_injury_criteria
 ```
 
 ### 多 LLM 提供商支持与自动故障回退
@@ -57,7 +63,7 @@ SubAgent Workflow（OmAgent 风格 ToolLoopNode）
 
 ### 多 Agent 协作架构
 
-7 个专业 Sub-Agent 分别对应不同仿真域，Main Agent 通过 `delegate_to_agent` 路由：
+18 个专业 Sub-Agent 分别对应不同仿真域，Main Agent 通过 `delegate_to_agent` 路由：
 
 | Sub-Agent | 负责领域 | 典型任务 |
 |-----------|---------|---------|
@@ -68,8 +74,19 @@ SubAgent Workflow（OmAgent 风格 ToolLoopNode）
 | `motorcad` | 解析法初设计（PyMotorCAD） | 快速估算效率/温升，导出到 Maxwell |
 | `optimization` | 参数优化（optiSLang） | 敏感性分析、多目标优化 |
 | `reporting` | 自动化报告 | HTML/PDF 双轨输出 |
+| `ev_powertrain` | EV 电驱系统联仿 | 电池+控制器+电机联合仿真 |
+| `nvh` | NVH 噪声振动 | 电磁力→结构→声学完整链路 |
+| `cost` | 成本估算 | 材料用量+制造工艺成本 |
+| `crash` | 整车碰撞安全（LS-DYNA） | 正面/侧面/后部碰撞、行人保护 |
+| `vehicle_cfd` | 整车 CFD | 外流场空气动力学、电池热管理 |
+| `fatigue` | 疲劳耐久 | S-N/E-N 曲线、载荷谱分析 |
+| `vehicle_dynamics` | 整车动力学 VD | 操稳性、平顺性、制动性能 |
+| `vehicle_structural` | 整车结构强度 | 静力学、准静态、屈曲分析 |
+| `advanced_meshing` | 高级网格划分 | 结构/流体网格、质量检查 |
+| `vehicle_nvh` | 整车 NVH | 模态分析、频率响应、声学分析 |
+| `test_data` | 试验数据管理 | NVH/VD/耐久试验数据、CAE 相关性分析 |
 
-单次对话可跨多个 Sub-Agent 完成端到端流程（Motor-CAD 初设计 → Maxwell 精化 → Icepak 热分析 → 优化 → 报告）。
+单次对话可跨多个 Sub-Agent 完成端到端流程（Motor-CAD 初设计 → Maxwell 精化 → Icepak 热分析 → 优化 → 报告；或 网格划分 → 整车 CFD → 结构强度 → NVH → 碰撞安全 → 报告）。
 
 ### OmAgent 风格工作流内核
 
