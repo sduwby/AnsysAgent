@@ -63,9 +63,23 @@ _log_port = _start_log_server()
 
 console = Console()
 VERSION = "0.1.0"
-USER_PROMPT_RICH = "\n[bold green]用户[/bold green]> "
-ASSISTANT_PROMPT_RICH = "\n[bold cyan]AnsysAgent[/bold cyan]> "
-THINKING_PROMPT_RICH = "[bold magenta]AnsysAgent Thinking[/bold magenta]> "
+
+# 终端样式配置（参考 claude-code-sourcemap 设计）
+TERMINAL_STYLES = {
+    'primary': '#d7775f',      # Claude 橙色
+    'secondary': '#89b4fa',    # 蓝色
+    'success': '#4ade80',      # 绿色
+    'error': '#f87171',        # 红色
+    'warning': '#fbbf24',      # 黄色
+    'info': '#60a5fa',         # 蓝色
+    'code_bg': '#1e1e2e',      # 代码背景
+    'code_fg': '#cdd6f4',      # 代码前景
+    'dim': '#6c7086',          # 暗色
+}
+
+USER_PROMPT_RICH = "\n[bold #4ade80]用户[/bold #4ade80]> "
+ASSISTANT_PROMPT_RICH = "\n[bold #89b4fa]AnsysAgent[/bold #89b4fa]> "
+THINKING_PROMPT_RICH = "[bold #fbbf24]AnsysAgent Thinking[/bold #fbbf24]> "
 
 # ---------------------------------------------------------------------------
 # 彩蛋素材
@@ -143,7 +157,7 @@ if _PTK_AVAILABLE:
 
     _PTK_STYLE = PtkStyle.from_dict({
         "completion-menu.completion": "bg:#1e1e2e #cdd6f4",
-        "completion-menu.completion.current": "bg:#89b4fa #1e1e2e bold",
+        "completion-menu.completion.current": "bg:#d7775f #1e1e2e bold",
         "scrollbar.background": "bg:#313244",
         "scrollbar.button": "bg:#89b4fa",
     })
@@ -160,15 +174,20 @@ else:
 
 
 WELCOME = (
-    "[bold cyan]Ansys 电机仿真智能助手[/bold cyan]\n"
-    "支持电磁仿真、热分析、NVH结构振动、Circuit联仿、参数化扫描与 optiSLang 优化\n"
-    "基于 AEDT ，支持 DeepSeek / ChatGPT / Claude / Qwen / Gemini\n\n"
+    "[bold #d7775f]Ansys 电机仿真智能助手[/bold #d7775f]\n"
+    "[bold #89b4fa]支持[/bold #89b4fa] 电磁仿真、热分析、NVH结构振动、Circuit联仿、参数化扫描与 optiSLang 优化\n"
+    "[bold #89b4fa]基于[/bold #89b4fa] AEDT ，支持 DeepSeek / ChatGPT / Claude / Qwen / Gemini\n\n"
     "[dim]输入自然语言描述需求，例如：\n"
     "  • 帮我建一个36槽6极的永磁同步电机，外径150mm\n"
     "  • 运行磁静态仿真并获取转矩\n"
     "  • 导出反电动势波形到 /tmp/bemf.csv\n"
-    "  /help 查看帮助 | /config 配置 LLM | /rules 管理规则 | /skills 管理技能 | /mcp 管理 MCP | /exit 退出[/dim]\n"
-    f"[dim]📋 Log viewer: http://localhost:{{_log_port}}[/dim]"
+    "  [bold #d7775f]/help[/bold #d7775f] 查看帮助 | "
+    "  [bold #d7775f]/config[/bold #d7775f] 配置 LLM | "
+    "  [bold #d7775f]/rules[/bold #d7775f] 管理规则 | "
+    "  [bold #d7775f]/skills[/bold #d7775f] 管理技能 | "
+    "  [bold #d7775f]/mcp[/bold #d7775f] 管理 MCP | "
+    "  [bold #d7775f]/exit[/bold #d7775f] 退出[/dim]\n"
+    "[dim]📋 Log viewer: http://localhost:{{_log_port}}[/dim]"
 )
 
 
@@ -667,7 +686,8 @@ def _stream_response(agent, user_input: str) -> str:
                 console.print()
                 in_thinking = False
             payload = chunk[len("\x00TOOL\x00"):]
-            console.print(f"[dim]🔧 调用工具: [bold]{payload.split(':', 1)[0]}[/bold][/dim]")
+            tool_name = payload.split(':', 1)[0]
+            console.print(f"[dim]🔧 [bold #89b4fa]调用工具[/bold #89b4fa]: [bold #d7775f]{tool_name}[/bold #d7775f][/dim]")
         elif chunk.startswith("\x00TOOL_RESULT\x00"):
             # 工具执行结果
             if text_renderer is not None:
@@ -681,8 +701,8 @@ def _stream_response(agent, user_input: str) -> str:
                 console.print()
                 in_thinking = False
             result = chunk[len("\x00TOOL_RESULT\x00"):]
-            color = "green" if result.startswith("✓") else "red"
-            console.print(f"[{color}]  {result}[/{color}]")
+            status_color = "#4ade80" if result.startswith("✓") else "#f87171"
+            console.print(f"[{status_color}]  {result}[/{status_color}]")
         else:
             # 正常文本 token，交给专用 assistant renderer 处理。
             text_buf += chunk
