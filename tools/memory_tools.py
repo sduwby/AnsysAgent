@@ -5,6 +5,7 @@ Memory 工具：供 Main Agent 调用的持久化记忆接口。
 from __future__ import annotations
 
 from agent.memory_manager import MemoryManager
+from tools.utils import _err, _ok
 
 
 def list_memories(query: str = "", top_k: int = 10) -> dict:
