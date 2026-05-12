@@ -68,6 +68,14 @@ Every domain follows the same pattern:
 | `ev_powertrain` | `ev_powertrain_agent.py` | battery + controller + motor cosim |
 | `nvh` | `nvh_agent.py` | EM force → structural → acoustic chain |
 | `cost` | `cost_agent.py` | manufacturing cost estimation |
+| `crash` | `crash_agent.py` | vehicle crash safety (LS-DYNA frontal/side/rear/pedestrian) |
+| `vehicle_cfd` | `vehicle_cfd_agent.py` | vehicle CFD (external aero, battery thermal, underhood) |
+| `fatigue` | `fatigue_agent.py` | fatigue durability (S-N/E-N curves, load spectrum) |
+| `vehicle_dynamics` | `vehicle_dynamics_agent.py` | vehicle dynamics (handling, ride comfort, braking) |
+| `vehicle_structural` | `vehicle_structural_agent.py` | vehicle structural (static, quasi-static, buckling) |
+| `advanced_meshing` | `advanced_meshing_agent.py` | advanced meshing (structural/fluid mesh, quality check) |
+| `vehicle_nvh` | `vehicle_nvh_agent.py` | vehicle NVH (modal, frequency response, acoustics) |
+| `test_data` | `test_data_agent.py` | test data management (NVH/VD/durability test data, CAE correlation) |
 
 ### Runtime Data Directory
 
