@@ -1,16 +1,205 @@
-"""Knowledge ingestion and chunking."""
+"""Knowledge ingestion and chunking with vector embedding."""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 import zipfile
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
+import httpx
+
+from rag.config import (
+    EMBEDDING_PROVIDER,
+    SILICONFLOW_API_KEY,
+    SILICONFLOW_BASE_URL,
+    SILICONFLOW_EMBEDDING_MODEL,
+)
+from rag.config_manager import get_provider_config, read_env_file
+
+try:
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+    _LOCAL_EMBEDDING_AVAILABLE = True
+except ImportError:
+    _LOCAL_EMBEDDING_AVAILABLE = False
+
+_log = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = {".md", ".txt", ".rst", ".json", ".pdf", ".ipynb", ".py", ".pptx"}
 _IGNORED_NAMES = {".ds_store", "__pycache__"}
+
+_embedding_model = None
+
+_SILICONFLOW_BATCH_SIZE = 64
+_SILICONFLOW_MAX_RETRIES = 3
+_SILICONFLOW_RETRY_DELAY = 1.0
+
+
+def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
+    global _embedding_model
+    if _embedding_model is None:
+        if not _LOCAL_EMBEDDING_AVAILABLE:
+            raise ImportError("请安装 sentence-transformers 和 numpy: pip install sentence-transformers numpy")
+        _embedding_model = SentenceTransformer(model_name)
+    return _embedding_model
+
+
+def compute_embeddings_local(texts: list[str], model_name: str = "all-MiniLM-L6-v2") -> list[list[float]]:
+    model = get_embedding_model(model_name)
+    embeddings = model.encode(texts, convert_to_numpy=True)
+    return embeddings.tolist()
+
+
+def compute_embeddings_siliconflow(
+    texts: list[str],
+    api_key: str = "",
+    base_url: str = "",
+    model: str = "",
+) -> list[list[float]]:
+    key = api_key or SILICONFLOW_API_KEY
+    url = (base_url or SILICONFLOW_BASE_URL).rstrip("/") + "/embeddings"
+    model_name = model or SILICONFLOW_EMBEDDING_MODEL
+
+    if not key:
+        raise ValueError("SiliconFlow API Key 未配置，请设置 SILICONFLOW_API_KEY 环境变量")
+
+    all_embeddings: list[list[float]] = []
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    for batch_start in range(0, len(texts), _SILICONFLOW_BATCH_SIZE):
+        batch = texts[batch_start:batch_start + _SILICONFLOW_BATCH_SIZE]
+        payload = {
+            "model": model_name,
+            "input": batch,
+        }
+
+        for attempt in range(_SILICONFLOW_MAX_RETRIES):
+            try:
+                resp = httpx.post(url, json=payload, headers=headers, timeout=60.0)
+                resp.raise_for_status()
+                data = resp.json()
+
+                if "data" not in data:
+                    raise ValueError(f"SiliconFlow API 返回格式异常: {list(data.keys())}")
+
+                sorted_data = sorted(data["data"], key=lambda x: x.get("index", 0))
+                batch_embeddings = [item["embedding"] for item in sorted_data]
+                all_embeddings.extend(batch_embeddings)
+                break
+
+            except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+                if attempt < _SILICONFLOW_MAX_RETRIES - 1:
+                    wait = _SILICONFLOW_RETRY_DELAY * (2 ** attempt)
+                    _log.warning("SiliconFlow 嵌入请求失败 (第%d次重试): %s", attempt + 1, exc)
+                    time.sleep(wait)
+                else:
+                    raise RuntimeError(f"SiliconFlow 嵌入请求失败 (已重试{_SILICONFLOW_MAX_RETRIES}次): {exc}") from exc
+
+    return all_embeddings
+
+
+def compute_embeddings_api(
+    texts: list[str],
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> list[list[float]]:
+    """
+    通用的嵌入 API 调用函数，支持任意符合 OpenAI 格式的嵌入服务
+    
+    参数:
+        texts: 要嵌入的文本列表
+        api_key: API Key
+        base_url: API 基础 URL
+        model: 模型名称
+    
+    返回:
+        嵌入向量列表
+    """
+    if not api_key:
+        raise ValueError("API Key 未配置")
+
+    url = base_url.rstrip("/") + "/embeddings"
+    all_embeddings: list[list[float]] = []
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    for batch_start in range(0, len(texts), _SILICONFLOW_BATCH_SIZE):
+        batch = texts[batch_start:batch_start + _SILICONFLOW_BATCH_SIZE]
+        payload = {
+            "model": model,
+            "input": batch,
+        }
+
+        for attempt in range(_SILICONFLOW_MAX_RETRIES):
+            try:
+                resp = httpx.post(url, json=payload, headers=headers, timeout=60.0)
+                resp.raise_for_status()
+                data = resp.json()
+
+                if "data" not in data:
+                    raise ValueError(f"API 返回格式异常: {list(data.keys())}")
+
+                sorted_data = sorted(data["data"], key=lambda x: x.get("index", 0))
+                batch_embeddings = [item["embedding"] for item in sorted_data]
+                all_embeddings.extend(batch_embeddings)
+                break
+
+            except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+                if attempt < _SILICONFLOW_MAX_RETRIES - 1:
+                    wait = _SILICONFLOW_RETRY_DELAY * (2 ** attempt)
+                    _log.warning("嵌入请求失败 (第%d次重试): %s", attempt + 1, exc)
+                    time.sleep(wait)
+                else:
+                    raise RuntimeError(f"嵌入请求失败 (已重试{_SILICONFLOW_MAX_RETRIES}次): {exc}") from exc
+
+    return all_embeddings
+
+
+def compute_embeddings(
+    texts: list[str],
+    model_name: str = "all-MiniLM-L6-v2",
+    provider: str = "",
+) -> list[list[float]]:
+    embed_provider = provider or EMBEDDING_PROVIDER
+
+    if embed_provider == "siliconflow":
+        sf_model = model_name if model_name != "all-MiniLM-L6-v2" else SILICONFLOW_EMBEDDING_MODEL
+        return compute_embeddings_siliconflow(texts, model=sf_model)
+    elif embed_provider == "local":
+        if not _LOCAL_EMBEDDING_AVAILABLE:
+            raise ImportError(
+                "本地嵌入不可用，请安装 sentence-transformers: pip install sentence-transformers numpy\n"
+                "或切换到远程提供商"
+            )
+        return compute_embeddings_local(texts, model_name)
+    else:
+        # 自定义提供商
+        provider_config = get_provider_config(embed_provider)
+        if not provider_config:
+            raise ValueError(f"未知提供商: {embed_provider}")
+        
+        env = read_env_file()
+        prefix = f"CUSTOM_PROVIDER_{embed_provider.upper()}"
+        api_key = env.get(f"{prefix}_API_KEY", "")
+        base_url = env.get(f"{prefix}_BASE_URL", "")
+        model = env.get(f"{prefix}_MODEL", model_name)
+        
+        if not api_key:
+            raise ValueError(f"提供商 {embed_provider} 的 API Key 未配置")
+        if not base_url:
+            raise ValueError(f"提供商 {embed_provider} 的基础 URL 未配置")
+        
+        return compute_embeddings_api(texts, api_key, base_url, model)
 
 
 def discover_documents(doc_paths: list[str | Path]) -> list[Path]:
@@ -158,14 +347,19 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 120) -> list[st
     return chunks
 
 
-def build_chunks(doc_paths: list[str | Path]) -> tuple[list[dict], list[str]]:
+def build_chunks(
+    doc_paths: list[str | Path],
+    with_embeddings: bool = False,
+    model_name: str = "all-MiniLM-L6-v2",
+    embedding_provider: str = "",
+) -> tuple[list[dict], list[str]]:
     warnings: list[str] = []
     chunks: list[dict] = []
     for document in discover_documents(doc_paths):
         text, doc_warnings = extract_text(document)
         warnings.extend(f"{document}: {warning}" for warning in doc_warnings)
         for chunk_index, content in enumerate(chunk_text(text), start=1):
-            chunks.append({
+            chunk = {
                 "id": f"{document.as_posix()}#{chunk_index}",
                 "path": str(document),
                 "title": document.stem,
@@ -173,5 +367,21 @@ def build_chunks(doc_paths: list[str | Path]) -> tuple[list[dict], list[str]]:
                 "chunk_index": chunk_index,
                 "content": content,
                 "tokens": tokenize_text(content),
-            })
+            }
+            chunks.append(chunk)
+
+    if with_embeddings and chunks:
+        provider = embedding_provider or EMBEDDING_PROVIDER
+        can_embed = (provider == "siliconflow") or _LOCAL_EMBEDDING_AVAILABLE
+        if can_embed:
+            try:
+                contents = [chunk["content"] for chunk in chunks]
+                embeddings = compute_embeddings(contents, model_name=model_name, provider=provider)
+                for i, chunk in enumerate(chunks):
+                    chunk["embedding"] = embeddings[i]
+            except Exception as exc:
+                warnings.append(f"向量嵌入计算失败 ({provider}): {exc}")
+        else:
+            warnings.append("向量嵌入不可用：未安装 sentence-transformers 且未配置 SiliconFlow")
+
     return chunks, warnings

@@ -64,9 +64,14 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.minimaxi.com/v1",
         "models": ["minimax-m2"],
     },
+    "siliconflow": {
+        "name": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "models": ["BAAI/bge-m3"],
+    },
 }
 
-FALLBACK_CHAIN = ["openrouter", "openai", "glm", "minimax"]
+FALLBACK_CHAIN = ["openrouter", "openai", "glm", "minimax", "siliconflow"]
 
 _LEGACY_KEY_ENV = {
     "openrouter": "OPENROUTER_API_KEY",
@@ -76,6 +81,7 @@ _LEGACY_KEY_ENV = {
     "gemini": "GEMINI_API_KEY",
     "glm": "ZHIPUAI_API_KEY",
     "minimax": "MINIMAX_API_KEY",
+    "siliconflow": "SILICONFLOW_API_KEY",
 }
 
 _BUILTIN_API_KEYS = {
@@ -104,6 +110,7 @@ _PROVIDER_CHOICES = [
     ("gemini", "Gemini"),
     ("glm", "GLM"),
     ("minimax", "MiniMax"),
+    ("siliconflow", "SiliconFlow"),
 ]
 
 

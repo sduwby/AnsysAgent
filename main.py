@@ -997,6 +997,68 @@ def _make_config_handler(agent_ref) -> "Callable":
     return _handle_config
 
 
+def _handle_embed(ctx: CommandContext) -> str:
+    """处理 /embed 命令，管理嵌入模型配置"""
+    from rag.config_manager import run_embedding_wizard, format_config_info, get_current_config
+    
+    try:
+        args = ctx.args.strip()
+        
+        if not args:
+            # 显示帮助和当前配置
+            ctx.console.print(format_config_info(get_current_config()))
+        else:
+            # 解析子命令
+            parts = args.split(None, 1)
+            sub_cmd = parts[0].lower()
+            sub_args = parts[1] if len(parts) > 1 else ""
+            
+            if sub_cmd == "config":
+                # 启动配置向导
+                run_embedding_wizard(ctx.console)
+            elif sub_cmd == "provider":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="provider", provider=sub_args.strip())
+                ctx.console.print(result)
+            elif sub_cmd == "model":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="model", model=sub_args.strip())
+                ctx.console.print(result)
+            elif sub_cmd == "key":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="key", api_key=sub_args.strip())
+                ctx.console.print(result)
+            elif sub_cmd == "url":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="url", base_url=sub_args.strip())
+                ctx.console.print(result)
+            elif sub_cmd == "models":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="models")
+                ctx.console.print(result)
+            elif sub_cmd == "providers":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="providers")
+                ctx.console.print(result)
+            elif sub_cmd == "add":
+                from tools.embedding_config_tool import manage_embedding_config
+                custom_args = sub_args.split()
+                result = manage_embedding_config(command="add", custom_args=custom_args)
+                ctx.console.print(result)
+            elif sub_cmd == "delete":
+                from tools.embedding_config_tool import manage_embedding_config
+                result = manage_embedding_config(command="delete", provider=sub_args.strip())
+                ctx.console.print(result)
+            else:
+                ctx.console.print(f"未知子命令: {sub_cmd}\n\n支持的子命令: config, provider, model, key, url, models, providers, add, delete")
+        
+    except Exception as e:
+        _log.error("嵌入配置操作失败: %s", e, exc_info=True)
+        ctx.console.print(f"[red]操作失败: {e}[/red]")
+    
+    return DispatchResult.HANDLED
+
+
 def _handle_roles(ctx: CommandContext) -> str:
     try:
         run_roles_wizard(ctx.console)
@@ -1230,6 +1292,7 @@ def _register_commands(agent) -> None:
     r.register("/status",  "显示当前会话状态（模型/历史/MCP）",  _make_status_handler(agent))
     r.register("/thinking","切换模型 thinking / reasoning",      _make_thinking_handler(agent))
     r.register("/history", "查看最近对话记录（可指定条数）",     _make_history_handler(agent))
+    r.register("/embed",   "管理嵌入模型配置（提供商/模型/API Key）", _handle_embed)
     r.register("/coffee",  "☕ 彩蛋",                           _handle_coffee)
     r.register("/motor",   "⚡ 彩蛋",                           _handle_motor)
     r.register("/pet",     "🐾 查看/喂食/摸摸你的仿真宠物安安", _handle_pet)
@@ -1244,6 +1307,15 @@ def _register_commands(agent) -> None:
     r.register_hint("/pet pat",          "💛 摸摸宠物")
     r.register_hint("/pet talk",         "💬 与宠物对话")
     r.register_hint("/pet rename",       "✏️  给宠物改名")
+    r.register_hint("/embed config",     "查看当前嵌入配置")
+    r.register_hint("/embed provider",   "切换嵌入提供商（local/siliconflow/自定义）")
+    r.register_hint("/embed model",      "设置嵌入模型名称")
+    r.register_hint("/embed key",        "设置 API Key")
+    r.register_hint("/embed url",        "设置 API 基础 URL")
+    r.register_hint("/embed models",     "查看支持的模型列表")
+    r.register_hint("/embed providers",  "查看所有可用提供商")
+    r.register_hint("/embed add",        "添加自定义提供商")
+    r.register_hint("/embed delete",     "删除自定义提供商")
 
 
 @click.command()

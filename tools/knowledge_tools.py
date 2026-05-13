@@ -1,4 +1,4 @@
-"""Knowledge retrieval tools backed by the local RAG index."""
+"""Knowledge retrieval tools backed by the local RAG index with vector search."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from tools.utils import _ok, _err, append_warnings, ok_message
 def build_knowledge_index(
     doc_paths: list[str] | None = None,
     force_rebuild: bool = True,
+    with_embeddings: bool = True,
 ) -> dict:
-    """Build a local keyword index for official/internal documents."""
+    """Build a local keyword index for official/internal documents with optional vector embeddings."""
     try:
         if not force_rebuild and DEFAULT_INDEX_PATH.exists():
             return _ok(ok_message(
@@ -19,12 +20,18 @@ def build_knowledge_index(
                 index_path=str(DEFAULT_INDEX_PATH),
                 reused_existing_index=True,
             ))
-        index_data = build_index(doc_paths=doc_paths or DEFAULT_DOC_PATHS)
+        index_data = build_index(
+            doc_paths=doc_paths or DEFAULT_DOC_PATHS,
+            with_embeddings=with_embeddings,
+        )
+        embedding_status = "带向量嵌入" if index_data.get("has_embeddings") else "纯关键词"
         result = ok_message(
-            f"知识索引已构建，共 {index_data['num_chunks']} 个 chunk",
+            f"知识索引已构建，共 {index_data['num_chunks']} 个 chunk ({embedding_status})",
             index_path=str(DEFAULT_INDEX_PATH),
             num_chunks=index_data["num_chunks"],
             doc_paths=index_data["doc_paths"],
+            has_embeddings=index_data.get("has_embeddings", False),
+            embedding_model=index_data.get("embedding_model"),
         )
         return _ok(append_warnings(result, index_data.get("warnings", [])))
     except Exception as exc:
@@ -35,19 +42,41 @@ def search_official_docs(
     query: str,
     top_k: int = 5,
     source_type: str = "",
+    retrieval_mode: str = "hybrid",  # "vector", "keyword", or "hybrid"
 ) -> dict:
-    """Search the local RAG index for relevant official or internal docs."""
+    """
+    Search the local RAG index for relevant official or internal docs.
+    
+    Args:
+        query: Search query string
+        top_k: Maximum number of results to return (default: 5)
+        source_type: Optional filter by source type (api/official/internal/faq/workflow/manual)
+        retrieval_mode: Retrieval mode: "vector" (pure semantic search), 
+                        "keyword" (traditional keyword matching), or 
+                        "hybrid" (combined approach, default)
+    """
     try:
         if top_k <= 0:
             return _err("top_k 必须为正整数")
-        result = search_index(query=query, top_k=top_k, source_type=source_type, index_path=DEFAULT_INDEX_PATH)
+        if retrieval_mode not in ("vector", "keyword", "hybrid"):
+            return _err("retrieval_mode 必须是 'vector', 'keyword' 或 'hybrid'")
+        
+        result = search_index(
+            query=query,
+            top_k=top_k,
+            source_type=source_type,
+            index_path=DEFAULT_INDEX_PATH,
+            retrieval_mode=retrieval_mode,
+        )
         return _ok(ok_message(
             f"已检索到 {len(result['results'])} 条相关知识片段",
             query=query,
             top_k=top_k,
             source_type=source_type or None,
+            retrieval_mode=result["retrieval_mode"],
             index_path=result["index_path"],
             num_chunks=result["num_chunks"],
+            has_embeddings=result.get("has_embeddings", False),
             results=result["results"],
             warnings=result.get("warnings", []),
         ))

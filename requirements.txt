@@ -36,6 +36,10 @@ prompt_toolkit>=3.0.0  # Command line input enhancement
 # PDF text extraction (RAG knowledge indexing optional dependency)
 pypdf>=4.2.0
 
+# Vector embedding and semantic search (RAG enhancement)
+sentence-transformers>=2.7.0
+numpy>=1.26.0
+
 # MCP (Model Context Protocol) client SDK
 mcp>=1.0.0
 
