@@ -6,14 +6,15 @@ Maxwell Circuit 工具：驱动器电路与电机联合仿真封装。
 from __future__ import annotations
 
 from tools.utils import _ok, _err, append_warnings, ok_message
-
-_circuit_app = None  # 全局 Circuit 实例
+from tools.aedt_state import get_circuit_app, set_circuit_app, clear_circuit_app
 
 
 def _app():
-    if _circuit_app is None:
+    """获取当前线程的 Circuit 实例。"""
+    app = get_circuit_app()
+    if app is None:
         raise RuntimeError("未连接到 Maxwell Circuit，请先调用 connect_circuit。")
-    return _circuit_app
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -27,13 +28,13 @@ def connect_circuit(version: str | None = None, non_graphical: bool = False) -> 
         version: AEDT 版本号，如 "2024.1"、"2025.1"；不传则自动检测当前运行版本
         non_graphical: 是否以无界面批处理模式运行
     """
-    global _circuit_app
     try:
         from ansys.aedt.core import Circuit
         kwargs = {"non_graphical": non_graphical, "new_desktop": False}
         if version is not None:
             kwargs["version"] = version
-        _circuit_app = Circuit(**kwargs)
+        circuit_app = Circuit(**kwargs)
+        set_circuit_app(circuit_app)
         version_desc = version if version else "（自动检测）"
         return _ok(ok_message(f"已连接到 Maxwell Circuit {version_desc}", version=version))
     except Exception as e:

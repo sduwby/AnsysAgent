@@ -8,15 +8,15 @@ from __future__ import annotations
 import os
 
 from tools.utils import _ok, _err, append_warnings
-
-_mcad_app = None  # 全局 Motor-CAD 实例
+from tools.aedt_state import get_mcad_app, set_mcad_app, clear_mcad_app
 
 
 def _app():
-    """返回当前激活的 Motor-CAD 实例，未连接时抛出异常。"""
-    if _mcad_app is None:
-        raise RuntimeError("未连接到 Motor-CAD，请先调用 connect_motorcad。")
-    return _mcad_app
+    """获取当前线程的 Motor-CAD 实例，未连接时抛出异常。"""
+    app = get_mcad_app()
+    if app is None:
+        raise RuntimeError("未连接，请先调用 connect_motorcad。")
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -30,16 +30,16 @@ def connect_motorcad(port: int = 0) -> dict:
     Args:
         port: Motor-CAD RPC 端口号；0 表示自动查找空闲端口（推荐）。
     """
-    global _mcad_app
     try:
         import ansys.motorcad.core as mcad
-        _mcad_app = mcad.MotorCAD(port=port if port else None, reuse_parallel_instances=False)
+        mcad_app = mcad.MotorCAD(port=port if port else None, reuse_parallel_instances=False)
         warnings: list[str] = []
         try:
-            _mcad_app.set_variable("MessageDisplayState", 2)  # 静默模式，减少弹窗
+            mcad_app.set_variable("MessageDisplayState", 2)  # 静默模式，减少弹窗
         except Exception as e:
-            warnings.append(f"静默模式设置失败: {e}")
-        version = _mcad_app.get_variable("SoftwareVersion")
+            warnings.append(f"静默模式设置失败：{e}")
+        version = mcad_app.get_variable("SoftwareVersion")
+        set_mcad_app(mcad_app)
         return _ok(append_warnings({
             "version": version,
             "port": port or "自动",
@@ -414,13 +414,15 @@ def export_motorcad_to_maxwell(
 
 def disconnect_motorcad() -> dict:
     """断开与 Motor-CAD 的连接，释放许可证。"""
-    global _mcad_app
     try:
-        if _mcad_app is not None:
-            _mcad_app.quit()
-            _mcad_app = None
+        app = get_mcad_app()
+        if app is not None:
+            try:
+                app.quit()
+            except Exception:
+                pass
+            clear_mcad_app()
         return _ok({
-            "message": "Motor-CAD 连接已断开",
             "disconnected": True,
         })
     except Exception as e:

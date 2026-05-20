@@ -10,19 +10,21 @@ from tools.utils import _ok, _err, assign_power_sources
 
 
 def _maxwell_app():
-    """获取 Maxwell AEDT 全局实例。"""
-    from tools import maxwell_tools
-    if maxwell_tools._aedt_app is None:
+    """获取 Maxwell AEDT 实例。"""
+    from tools.aedt_state import get_maxwell_app
+    app = get_maxwell_app()
+    if app is None:
         raise RuntimeError("未连接到 AEDT，请先调用 connect_aedt。")
-    return maxwell_tools._aedt_app
+    return app
 
 
 def _icepak_app():
-    """获取 Icepak 全局实例。"""
-    from tools import icepak_tools
-    if icepak_tools._icepak_app is None:
+    """获取 Icepak 实例。"""
+    from tools.aedt_state import get_icepak_app
+    app = get_icepak_app()
+    if app is None:
         raise RuntimeError("未连接到 Icepak，请先调用 connect_icepak。")
-    return icepak_tools._icepak_app
+    return app
 
 
 def _apply_temperature_feedback(maxwell_app, temperature_map: dict[str, float]) -> dict:
@@ -127,10 +129,15 @@ def link_maxwell_to_icepak(
                 return _err("Maxwell 损耗结果为空或全为 0，无法映射到 Icepak")
 
             # 设置均匀热源
+            # ⚠️ 重要说明：以下比例为经验值，实际应用中应从 Maxwell 读取各部件实际损耗
+            # TODO: 实现从 Maxwell 自动提取各部件损耗的功能
+            # 建议：使用 get_losses(setup_name) 从 Maxwell 提取各部件损耗，然后按比例分配
+            stator_ratio = 0.9  # 定子铁耗占比（经验值，需根据实际设计调整）
+            rotor_ratio = 0.1   # 转子铁耗占比（经验值，需根据实际设计调整）
             assignment = assign_power_sources(icepak_app, {
                 "Winding": avg_ohmic,
-                "Stator": avg_core * 0.9,
-                "Rotor": avg_core * 0.1,
+                "Stator": avg_core * stator_ratio,
+                "Rotor": avg_core * rotor_ratio,
             })
             assigned_sources = assignment["assigned"]
             assignment_errors = assignment["errors"]
@@ -180,6 +187,8 @@ def run_em_thermal_iteration(
         feedback_mode: "one_way" 为单向 Maxwell→Icepak 热迭代；
                        "two_way" 为严格双向耦合，要求温度可写回 Maxwell
     """
+    maxwell_app = None
+    icepak_app = None
     try:
         if feedback_mode not in {"one_way", "two_way"}:
             return _err(f"未知 feedback_mode: {feedback_mode}，仅支持 one_way / two_way")
@@ -245,6 +254,22 @@ def run_em_thermal_iteration(
             else:
                 feedback_result["reason"] = "单向模式未执行 Maxwell 温度回写"
 
+            # 记录当前迭代各部件温度
+            component_temps = temperature_map.copy() if temperature_map else {}
+
+            # 计算各部件跨迭代温度变化量，以及这些变化量的 RMS
+            component_delta = {}
+            rms_temp_error = None
+            if history:
+                prev_temps = history[-1].get("component_temps", {})
+                if prev_temps:
+                    for obj_name in ["Winding", "Stator", "Rotor"]:
+                        if obj_name in temperature_map and obj_name in prev_temps:
+                            component_delta[obj_name] = abs(temperature_map[obj_name] - prev_temps[obj_name])
+                    if component_delta:
+                        deltas = list(component_delta.values())
+                        rms_temp_error = (sum(d ** 2 for d in deltas) / len(deltas)) ** 0.5
+
             delta_t = abs(current_max_temp - prev_max_temp) if (
                 prev_max_temp is not None and current_max_temp is not None
             ) else None
@@ -255,10 +280,37 @@ def run_em_thermal_iteration(
                 "delta_T": round(delta_t, 3) if delta_t is not None else "N/A",
                 "feedback_mode": feedback_mode,
                 "feedback_variables": feedback_result.get("updated_variables", []),
+                "component_temps": component_temps,
+                "rms_temp_error": round(rms_temp_error, 3) if rms_temp_error is not None else "N/A",
+                "component_delta": component_delta,
             })
 
-            # 收敛判断
+            # 收敛判断：综合考虑最高温度差、RMS 误差和各部件变化
+            converged = False
+            convergence_reasons = []
+            
+            # 1. 最高温度变化小于判据
             if delta_t is not None and delta_t < convergence_temp_delta:
+                converged = True
+                convergence_reasons.append(f"最高温度变化ΔT={delta_t:.3f}°C < {convergence_temp_delta}°C")
+            
+            # 2. 各部件跨迭代温度变化量的 RMS 小于判据的 50%
+            if rms_temp_error is not None and rms_temp_error < convergence_temp_delta * 0.5:
+                converged = True
+                convergence_reasons.append(f"部件温度变化RMS={rms_temp_error:.3f}°C < {convergence_temp_delta*0.5:.3f}°C")
+            
+            # 3. 关键部件（绕组、定子）温度变化都小于判据
+            if component_delta:
+                critical_objects = ["Winding", "Stator"]
+                all_critical_converged = all(
+                    component_delta.get(obj, float('inf')) < convergence_temp_delta 
+                    for obj in critical_objects if obj in component_delta
+                )
+                if all_critical_converged and len(component_delta) >= 2:
+                    converged = True
+                    convergence_reasons.append(f"关键部件温度变化均< {convergence_temp_delta}°C")
+
+            if converged:
                 return _ok({
                     "converged": True,
                     "iterations": iteration,
@@ -266,7 +318,7 @@ def run_em_thermal_iteration(
                     "feedback_applied": feedback_applied,
                     "feedback_mode": feedback_mode,
                     "history": history,
-                    "message": f"第 {iteration} 轮收敛（ΔT={delta_t:.3f}°C < {convergence_temp_delta}°C）",
+                    "message": f"第 {iteration} 轮收敛 ({', '.join(convergence_reasons[:2])})",
                 })
             prev_max_temp = current_max_temp
 
@@ -282,6 +334,18 @@ def run_em_thermal_iteration(
         })
     except Exception as e:
         return _err(str(e))
+    finally:
+        from tools.aedt_state import clear_icepak_app, clear_maxwell_app
+        if icepak_app is not None:
+            try:
+                clear_icepak_app()
+            except Exception:
+                pass
+        if maxwell_app is not None:
+            try:
+                clear_maxwell_app()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +378,10 @@ def import_thermal_to_mechanical(
         # 若未指定 Icepak 路径，从当前 AEDT 项目推导
         if not icepak_project_path:
             try:
-                from tools import maxwell_tools
-                if maxwell_tools._aedt_app is not None:
-                    icepak_project_path = maxwell_tools._aedt_app.project_file
+                from tools.aedt_state import get_maxwell_app as _get_mxw
+                _mxw = _get_mxw()
+                if _mxw is not None:
+                    icepak_project_path = _mxw.project_file
             except Exception:
                 pass
 

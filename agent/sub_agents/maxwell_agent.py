@@ -25,6 +25,13 @@ class MaxwellAgent(SubAgentBase):
 
     def _infer_maxwell_flow(self, task: str) -> tuple[str, list[str]]:
         text = task.lower()
+        if self.has_negative_words(text):
+            return "general_analysis", [
+                "确认当前项目、设计和求解前置条件",
+                "按需配置模型/网格/边界/设置",
+                "执行求解并提取用户请求的结果",
+            ]
+        
         if any(token in text for token in ("效率", "efficiency", "map", "扫描", "sweep", "优化", "optimization")):
             return "performance_map", [
                 "检查现有设计变量和已求解 setup",

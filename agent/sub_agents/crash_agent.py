@@ -25,6 +25,13 @@ class CrashAgent(SubAgentBase):
 
     def _infer_crash_flow(self, task: str) -> tuple[str, list[str]]:
         text = task.lower()
+        if self.has_negative_words(text):
+            return "general_analysis", [
+                "确认当前项目、设计和求解前置条件",
+                "按需配置模型/网格/边界/设置",
+                "执行求解并提取用户请求的结果",
+            ]
+        
         if any(token in text for token in ("正面碰撞", "frontal", "偏置", "offset")):
             return "frontal_crash", [
                 "创建或加载碰撞 Deck",

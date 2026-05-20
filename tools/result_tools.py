@@ -101,6 +101,14 @@ def get_torque(setup_name: str = "Setup1", sweep_name: str = "LastAdaptive") -> 
             report_name="TorqueReport",
         )
         times = data.primary_sweep_values
+        # 检查表达式是否存在，提供更详细的错误信息
+        if "Moving1.Torque" not in data.expressions:
+            available = ", ".join(data.expressions[:10])
+            return _err(
+                f"未找到 'Moving1.Torque' 表达式\n"
+                f"可用表达式：{available}" + 
+                (f"\n... (共{len(data.expressions)}个)" if len(data.expressions) > 10 else "")
+            )
         torques = _require_series(data, "Moving1.Torque", "未获取到转矩数据，请确认已完成求解并存在运动设置")
         avg = sum(torques) / len(torques)
 

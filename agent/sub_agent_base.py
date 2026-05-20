@@ -34,6 +34,15 @@ class SubAgentBase:
     description: str = "通用 Sub-Agent"
     workflow_stages: tuple[str, ...] = ("plan", "execute", "summarize")
 
+    # 否定词模式，用于防止任务推断误判
+    NEGATIVE_PATTERNS = ["不要", "别", "不", "非", "取消", "remove", "skip"]
+
+    @staticmethod
+    def has_negative_words(text: str) -> bool:
+        """检测文本中是否包含否定词，防止任务推断误判。"""
+        text_lower = text.lower()
+        return any(pattern in text_lower for pattern in SubAgentBase.NEGATIVE_PATTERNS)
+
     def __init__(
         self,
         client: OpenAI,

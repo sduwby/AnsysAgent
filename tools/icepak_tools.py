@@ -6,14 +6,15 @@ Icepak 热分析工具：通过 PyAEDT 驱动 Ansys Icepak 进行电机热仿真
 from __future__ import annotations
 
 from tools.utils import _ok, _err, assign_power_sources, ok_message
-
-_icepak_app = None  # 全局 Icepak 实例
+from tools.aedt_state import get_icepak_app, set_icepak_app, clear_icepak_app
 
 
 def _app():
-    if _icepak_app is None:
+    """获取当前线程的 Icepak 实例。"""
+    app = get_icepak_app()
+    if app is None:
         raise RuntimeError("未连接到 Icepak，请先调用 connect_icepak。")
-    return _icepak_app
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -27,13 +28,13 @@ def connect_icepak(version: str | None = None, non_graphical: bool = False) -> d
         version: AEDT 版本号，如 "2024.1"、"2025.1"；不传则自动检测当前运行版本
         non_graphical: 是否以无界面批处理模式运行
     """
-    global _icepak_app
     try:
         from ansys.aedt.core import Icepak
         kwargs = {"non_graphical": non_graphical, "new_desktop": False}
         if version is not None:
             kwargs["version"] = version
-        _icepak_app = Icepak(**kwargs)
+        icepak_app = Icepak(**kwargs)
+        set_icepak_app(icepak_app)
         version_desc = version if version else "（自动检测）"
         return _ok(ok_message(f"已连接到 Icepak {version_desc}", version=version))
     except Exception as e:
@@ -65,10 +66,12 @@ def setup_motor_thermal(
         app.modeler.set_working_coordinate_system("Global")
 
         # 为绕组和铁芯分配热源
+        # TODO: 实现从 Maxwell 自动提取各部件损耗的功能，避免使用经验值比例
+        # 目前使用经验值：定子铁耗 90%，转子铁耗 10%
         assignment = assign_power_sources(app, {
             "Winding": copper_loss_W,
-            "Stator": iron_loss_W * 0.9,
-            "Rotor": iron_loss_W * 0.1,
+            "Stator": iron_loss_W * 0.9,  # TODO: 从 Maxwell 读取实际定子损耗
+            "Rotor": iron_loss_W * 0.1,   # TODO: 从 Maxwell 读取实际转子损耗
         })
         assigned_sources = [item.split("=", 1)[0] for item in assignment["assigned"]]
         missing_objects = assignment["missing"]

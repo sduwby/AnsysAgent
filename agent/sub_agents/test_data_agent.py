@@ -25,6 +25,13 @@ class TestDataAgent(SubAgentBase):
 
     def _infer_test_flow(self, task: str) -> tuple[str, list[str]]:
         text = task.lower()
+        if self.has_negative_words(text):
+            return "general_analysis", [
+                "确认当前项目、设计和求解前置条件",
+                "按需配置模型/网格/边界/设置",
+                "执行求解并提取用户请求的结果",
+            ]
+        
         if any(token in text for token in ("导入", "import", "数据文件", "csv", "rpc", "unv", "uff")):
             return "data_import", [
                 "确认数据文件路径和格式",

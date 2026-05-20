@@ -4,7 +4,73 @@
 
 from __future__ import annotations
 import os
-from typing import Any
+import platform
+from functools import wraps
+from typing import Any, Callable
+import threading
+
+
+class TimeoutError(Exception):
+    """工具调用超时异常。"""
+    pass
+
+
+def signal_timeout(seconds: int) -> Callable:
+    """
+    为工具函数添加超时保护（跨平台支持）。
+    
+    用法:
+        @signal_timeout(3600)  # 1 小时超时
+        def run_simulation(...):
+            ...
+    
+    参数:
+        seconds: 超时时间（秒）
+    
+    返回:
+        装饰器函数
+    
+    注意:
+        - Unix/Linux/macOS: 使用 signal.SIGALRM 实现
+        - Windows: 不支持，装饰后的函数在 Windows 上调用时将抛出 NotImplementedError
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # 检测操作系统
+            system = platform.system()
+            
+            if system == "Windows":
+                # Windows 不支持 signal.SIGALRM，threading.Timer 无法中断正在阻塞的 AEDT 调用。
+                # 此平台上超时保护不生效，直接透传调用。
+                raise NotImplementedError(
+                    "signal_timeout 在 Windows 上不支持：SIGALRM 不可用，"
+                    "且 threading.Timer 无法中断阻塞中的 AEDT 调用。"
+                    "请在 Unix/Linux/macOS 环境下使用本装饰器。"
+                )
+            else:
+                # Unix/Linux/macOS: 使用 signal.SIGALRM
+                import signal
+                
+                def timeout_handler(signum: int, frame: Any) -> None:
+                    raise TimeoutError("工具调用超时")
+                
+                # 设置信号处理器
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                try:
+                    # 启动定时器
+                    signal.alarm(seconds)
+                    try:
+                        result = func(*args, **kwargs)
+                    finally:
+                        # 取消定时器
+                        signal.alarm(0)
+                finally:
+                    # 恢复旧的处理函数
+                    signal.signal(signal.SIGALRM, old_handler)
+                return result
+        return wrapper
+    return decorator
 
 
 def _ok(result: Any = None) -> dict:
@@ -109,3 +175,6 @@ def append_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, An
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+

@@ -21,6 +21,13 @@ class IcepakAgent(SubAgentBase):
 
     def _infer_icepak_flow(self, task: str) -> tuple[str, list[str]]:
         text = task.lower()
+        if self.has_negative_words(text):
+            return "general_analysis", [
+                "确认当前项目、设计和求解前置条件",
+                "按需配置模型/网格/边界/设置",
+                "执行求解并提取用户请求的结果",
+            ]
+        
         if any(token in text for token in ("耦合", "loss", "损耗", "maxwell", "电磁热")):
             return "em_thermal_coupling", [
                 "检查电磁损耗输入是否可用",

@@ -6,11 +6,13 @@ Maxwell 工具：PyAEDT 电机电磁仿真操作封装。
 from __future__ import annotations
 
 import math
+from typing import Any
 
 from tools.utils import _ok, _err, append_warnings, ensure_parent_dir, get_design_names, ok_message
+from tools.aedt_state import get_maxwell_app, set_maxwell_app, clear_maxwell_app
 
 # PyAEDT 延迟导入，允许在未安装 Ansys 的环境中加载模块
-_aedt_app = None  # 全局 AEDT Maxwell2d/3d 实例
+# 使用 aedt_state.py 的统一状态管理方案
 
 
 # ---------------------------------------------------------------------------
@@ -18,10 +20,11 @@ _aedt_app = None  # 全局 AEDT Maxwell2d/3d 实例
 # ---------------------------------------------------------------------------
 
 def _app():
-    """返回当前活跃的 Maxwell 应用实例，未连接时抛出异常。"""
-    if _aedt_app is None:
+    """返回当前活跃的 Maxwell 应用实例，未连接时抛出标准异常。"""
+    app = get_maxwell_app()
+    if app is None:
         raise RuntimeError("未连接到 AEDT，请先调用 connect_aedt。")
-    return _aedt_app
+    return app
 
 
 def _get_setup_names(app) -> list[str]:
@@ -141,12 +144,17 @@ def _set_geometry_variables(app, geometry_values: dict[str, float]) -> tuple[dic
     return geometry_variables, warnings
 
 
+# 常量定义 - 避免魔法数字
+MAX_ITERATIONS_DEFAULT = 100  # 热分析默认最大迭代次数
+ANGLE_PRECISION = 12  # PyAEDT 坐标精度限制（12 位有效数字）
+
+
 def _radial_point_expr(radius_expr: str, angle_deg: float) -> list[str]:
     cos_value = math.cos(math.radians(angle_deg))
     sin_value = math.sin(math.radians(angle_deg))
     return [
-        f"({radius_expr})*({cos_value:.12g})",
-        f"({radius_expr})*({sin_value:.12g})",
+        f"({radius_expr})*({cos_value:.{ANGLE_PRECISION}g})",
+        f"({radius_expr})*({sin_value:.{ANGLE_PRECISION}g})",
         "0mm",
     ]
 
@@ -171,8 +179,15 @@ def connect_aedt(
         project_path: 目标项目路径或项目名；留空则连接当前活动项目
         design_name: 目标设计名；留空则使用当前活动设计
     """
-    global _aedt_app
     try:
+        # 如果已有实例，先释放资源
+        existing = get_maxwell_app()
+        if existing is not None:
+            try:
+                existing.close()
+            except Exception:
+                pass
+        
         kwargs = {
             "non_graphical": non_graphical,
             "new_desktop": False,
@@ -185,10 +200,14 @@ def connect_aedt(
             kwargs["design"] = design_name
         if is_3d:
             from ansys.aedt.core import Maxwell3d
-            _aedt_app = Maxwell3d(**kwargs)
+            aedt_app = Maxwell3d(**kwargs)
         else:
             from ansys.aedt.core import Maxwell2d
-            _aedt_app = Maxwell2d(**kwargs)
+            aedt_app = Maxwell2d(**kwargs)
+        
+        # 使用 aedt_state.py 的统一状态管理
+        set_maxwell_app(aedt_app)
+        
         target = []
         if project_path:
             target.append(f"项目={project_path}")
@@ -208,6 +227,23 @@ def connect_aedt(
 
 
 # ---------------------------------------------------------------------------
+# 工具：disconnect_aedt - 断开 AEDT 连接
+# ---------------------------------------------------------------------------
+
+def disconnect_aedt() -> dict:
+    """
+    断开当前线程的 AEDT 连接，释放资源。
+    
+    注意：此函数只会释放当前线程的 AEDT 实例，不影响其他线程。
+    """
+    try:
+        clear_maxwell_app()
+        return _ok({"message": "AEDT 连接已断开，资源已释放"})
+    except Exception as e:
+        return _err(f"断开连接失败：{e}")
+
+
+# ---------------------------------------------------------------------------
 # 工具：create_maxwell_project - 创建项目
 # ---------------------------------------------------------------------------
 
@@ -215,11 +251,17 @@ def create_maxwell_project(project_name: str, design_name: str = "Motor") -> dic
     """创建新的 Maxwell 项目和设计。"""
     import os
     try:
+        # 参数验证
+        if not project_name or not project_name.strip():
+            return _err("project_name 不能为空")
+        if not design_name or not design_name.strip():
+            return _err("design_name 不能为空")
+        
         app = _app()
         if not project_name.endswith(".aedt"):
             project_name = project_name + ".aedt"
-        if not os.path.isabs(project_name):
-            project_name = os.path.join(os.getcwd(), project_name)
+        # 使用 abspath + normpath 确保路径安全，防止路径穿越
+        project_name = os.path.abspath(os.path.normpath(project_name))
 
         # 显式新建项目，避免把当前已打开项目误当成“新项目”继续写入。
         if hasattr(app, "odesktop") and hasattr(app.odesktop, "NewProject"):

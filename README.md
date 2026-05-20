@@ -146,6 +146,78 @@ ansys-agent -p "帮我建一个 36 槽 6 极 PMSM，外径 150mm"
 ansys-agent --version
 ```
 
+### AEDT 状态管理（多线程安全）
+
+从 v2026.5 开始，AnsysAgent 使用统一的 AEDT 状态管理方案（`tools/aedt_state.py`），支持：
+
+- **线程本地存储**：每个线程独立的 AEDT 应用实例，避免多线程/多会话冲突
+- **自动资源管理**：上下文管理器自动管理连接生命周期
+- **11 种应用类型支持**：Maxwell、Icepak、Motor-CAD、MAPDL、Mechanical、Circuit、RMXprt、NVH、EV Circuit
+
+#### 使用示例
+
+**方式 1：手动管理连接**
+
+```python
+from tools.aedt_state import set_maxwell_app, get_maxwell_app, clear_maxwell_app
+from ansys.aedt.core import Maxwell2d
+
+# 创建并设置应用实例
+maxwell_app = Maxwell2d(non_graphical=True)
+set_maxwell_app(maxwell_app)
+
+# 获取并使用
+app = get_maxwell_app()
+app.modeler.create_circle(...)
+
+# 手动释放资源
+clear_maxwell_app()
+```
+
+**方式 2：使用上下文管理器（推荐）**
+
+```python
+from tools.aedt_state import aedt_session
+
+# 自动管理连接生命周期
+with aedt_session("maxwell") as app:
+    # app 已自动设置，可直接使用
+    app.modeler.create_circle(...)
+# 退出上下文后自动释放资源
+
+# 支持的应用类型：
+# "maxwell", "icepak", "motorcad", "mapdl", 
+# "mech", "circuit", "rmxprt", "nvh_mech", "nvh_mapdl", "ev_circuit"
+```
+
+**方式 3：使用工具函数（自动管理）**
+
+```python
+from tools.maxwell_tools import connect_aedt, disconnect_aedt
+
+# 连接 AEDT（自动设置状态）
+connect_aedt(is_3d=False, non_graphical=True)
+
+# 使用工具函数...
+
+# 断开连接（自动释放资源）
+disconnect_aedt()
+```
+
+#### 注意事项
+
+- ⚠️ **AEDT 本身不支持多线程**：请确保并发场景下串行执行 AEDT 操作
+- ⚠️ **及时释放资源**：使用 `with aedt_session()` 或显式调用 `disconnect_aedt()` / `clear_*_app()`
+- ⚠️ **避免混用管理方式**：手动 `set_*_app()` 后应使用对应的 `clear_*_app()` 释放
+
+#### 相关工具函数
+
+- `get_manager()`: 获取单例状态管理器
+- `get_*_app() / set_*_app() / clear_*_app()`: 各应用类型的状态管理函数
+- `aedt_session(app_type)`: 上下文管理器，自动管理连接生命周期
+
+详细实现请参考 `tools/aedt_state.py`。
+
 ### 内置命令
 
 - `/help`：显示功能帮助

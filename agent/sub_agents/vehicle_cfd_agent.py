@@ -25,6 +25,13 @@ class VehicleCFDAgent(SubAgentBase):
 
     def _infer_cfd_flow(self, task: str) -> tuple[str, list[str]]:
         text = task.lower()
+        if self.has_negative_words(text):
+            return "general_analysis", [
+                "确认当前项目、设计和求解前置条件",
+                "按需配置模型/网格/边界/设置",
+                "执行求解并提取用户请求的结果",
+            ]
+        
         if any(token in text for token in ("风阻", "气动", "aero", "drag", "外流场", "cd", "cl")):
             return "external_aero", [
                 "加载车辆外流场网格",
