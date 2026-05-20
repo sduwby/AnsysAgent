@@ -7,21 +7,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from openai import OpenAI, RateLimitError, APIStatusError
+from openai import OpenAI
 
+from agent.llm_utils import is_fallback_error as _is_fallback_error
 from agent.logger import get_logger
 from agent.omagent_runtime import OmAgentContext, OmAgentWorkflow, PlanningNode, SummaryNode, ToolLoopNode
 
-_FALLBACK_STATUS_CODES = {429, 402, 503}
 _log = get_logger("sub_agent")
-
-
-def _is_fallback_error(exc: Exception) -> bool:
-    if isinstance(exc, RateLimitError):
-        return True
-    if isinstance(exc, APIStatusError) and exc.status_code in _FALLBACK_STATUS_CODES:
-        return True
-    return False
 
 
 class SubAgentBase:

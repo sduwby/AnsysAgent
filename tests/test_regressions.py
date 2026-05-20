@@ -99,6 +99,20 @@ class _DummyPrompt:
 
 
 rich_box_stub.SIMPLE_HEAVY = object()
+rich_style_stub = types.ModuleType("rich.style")
+rich_padding_stub = types.ModuleType("rich.padding")
+
+
+class _DummyStyle:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class _DummyPadding:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
 rich_console_stub.Console = _DummyConsole
 rich_console_stub.Group = _DummyGroup
 rich_live_stub.Live = _DummyLive
@@ -107,6 +121,8 @@ rich_panel_stub.Panel = _DummyPanel
 rich_prompt_stub.Prompt = _DummyPrompt
 rich_table_stub.Table = _DummyTable
 rich_text_stub.Text = _DummyText
+rich_style_stub.Style = _DummyStyle
+rich_padding_stub.Padding = _DummyPadding
 sys.modules.setdefault("rich", rich_stub)
 sys.modules.setdefault("rich.box", rich_box_stub)
 sys.modules.setdefault("rich.console", rich_console_stub)
@@ -116,6 +132,8 @@ sys.modules.setdefault("rich.panel", rich_panel_stub)
 sys.modules.setdefault("rich.prompt", rich_prompt_stub)
 sys.modules.setdefault("rich.table", rich_table_stub)
 sys.modules.setdefault("rich.text", rich_text_stub)
+sys.modules.setdefault("rich.style", rich_style_stub)
+sys.modules.setdefault("rich.padding", rich_padding_stub)
 
 openai_stub = types.ModuleType("openai")
 

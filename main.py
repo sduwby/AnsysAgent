@@ -62,7 +62,12 @@ from agent.log_server import start_log_server as _start_log_server
 _log_port = _start_log_server()
 
 console = Console()
-VERSION = "0.1.0"
+
+try:
+    from importlib.metadata import version as _pkg_version
+    VERSION = _pkg_version("ansys-agent")
+except Exception:
+    VERSION = "0.1.0"
 
 # 终端样式配置（参考 claude-code-sourcemap 设计）
 TERMINAL_STYLES = {

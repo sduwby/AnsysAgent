@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -80,6 +81,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 class SkillManager:
     _instance: Optional["SkillManager"] = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._skills: dict[str, Skill] = {}
@@ -88,7 +90,9 @@ class SkillManager:
     @classmethod
     def get_instance(cls) -> "SkillManager":
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def _scan(self) -> None:

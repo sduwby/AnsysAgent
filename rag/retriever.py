@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 
-from rag.config import EMBEDDING_PROVIDER, SILICONFLOW_EMBEDDING_MODEL
+from rag.config import EMBEDDING_PROVIDER, SILICONFLOW_EMBEDDING_MODEL, HYBRID_VECTOR_WEIGHT, HYBRID_KEYWORD_WEIGHT
 from rag.config_manager import get_provider_config, read_env_file
 
 try:
@@ -166,24 +166,29 @@ def retrieve(
     top_k: int = 5,
     source_type: str = "",
     retrieval_mode: str = "hybrid",
+    vector_weight: float | None = None,
+    keyword_weight: float | None = None,
 ) -> list[dict]:
     if retrieval_mode == "vector":
         return retrieve_vector(index_data, query, top_k, source_type)
     elif retrieval_mode == "keyword":
         return retrieve_keyword(index_data, query, top_k, source_type)
     else:
+        vw = vector_weight if vector_weight is not None else HYBRID_VECTOR_WEIGHT
+        kw = keyword_weight if keyword_weight is not None else HYBRID_KEYWORD_WEIGHT
+
         vector_results = retrieve_vector(index_data, query, top_k * 2, source_type)
         keyword_results = retrieve_keyword(index_data, query, top_k * 2, source_type)
 
         merged = {}
         for result in vector_results:
-            merged[result["id"]] = {"score": result["score"] * 0.6, "data": result}
+            merged[result["id"]] = {"score": result["score"] * vw, "data": result}
 
         for result in keyword_results:
             if result["id"] in merged:
-                merged[result["id"]]["score"] += result["score"] * 0.4
+                merged[result["id"]]["score"] += result["score"] * kw
             else:
-                merged[result["id"]] = {"score": result["score"] * 0.4, "data": result}
+                merged[result["id"]] = {"score": result["score"] * kw, "data": result}
 
         final_results = [
             {**item["data"], "score": round(item["score"], 4)}

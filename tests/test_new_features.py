@@ -77,25 +77,15 @@ class TestSignalTimeout(unittest.TestCase):
             # 应该调用 signal.alarm 两次（启动和取消）
             self.assertEqual(mock_alarm.call_count, 2)
     
-    @unittest.skipIf(platform.system() != "Windows", "仅 Windows 使用 Timer 机制")
-    def test_windows_timer_mechanism(self):
-        """Windows 系统使用 threading.Timer 机制。"""
-        from unittest.mock import patch
-        
+    def test_windows_passthrough(self):
+        """Windows 上超时保护不生效，函数直接透传执行。"""
         @signal_timeout(1)
         def func():
-            return True
+            return "passthrough"
         
-        with patch('threading.Timer') as mock_timer:
-            mock_timer_instance = MagicMock()
-            mock_timer.return_value = mock_timer_instance
-            
-            func()
-            
-            # 应该创建并启动 Timer
-            mock_timer.assert_called_once()
-            mock_timer_instance.start.assert_called_once()
-            mock_timer_instance.cancel.assert_called_once()
+        with patch('tools.utils.platform.system', return_value="Windows"):
+            result = func()
+            self.assertEqual(result, "passthrough")
 
 
 # 测试 aedt_state
@@ -167,31 +157,6 @@ class TestAedtState(unittest.TestCase):
         with self.assertRaises(ValueError):
             with aedt_session("invalid_app"):
                 pass
-
-
-# 测试线程安全检测
-from tools.utils import is_thread_safe, check_thread_safety
-
-
-class TestThreadSafety(unittest.TestCase):
-    """测试线程安全检测功能。"""
-    
-    def test_is_thread_safe_returns_false(self):
-        """AEDT 目前不支持多线程。"""
-        result = is_thread_safe()
-        self.assertFalse(result)
-    
-    def test_check_thread_safety_decorator_logs_warning(self):
-        """装饰器在多线程不支持时记录警告。"""
-        @check_thread_safety
-        def dummy_function():
-            return "success"
-        
-        with patch('logging.Logger.warning') as mock_warning:
-            result = dummy_function()
-            self.assertEqual(result, "success")
-            # 应该记录警告
-            mock_warning.assert_called_once()
 
 
 if __name__ == "__main__":

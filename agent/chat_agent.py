@@ -23,6 +23,7 @@ from agent.config_manager import (
     get_provider_api_key,
     model_supports_thinking,
 )
+from agent.llm_utils import is_fallback_error as _is_fallback_error, is_payment_error as _is_payment_error
 from agent.memory_manager import MemoryManager
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
@@ -50,23 +51,6 @@ from rag.service import build_index, search_index
 
 console = Console()
 _log = get_logger("chat_agent")
-
-# 触发回退的错误码（限速 / 余额不足）
-_FALLBACK_STATUS_CODES = {429, 402, 503}
-
-
-def _is_fallback_error(exc: Exception) -> bool:
-    """判断异常是否应触发回退到下一个提供商。"""
-    if isinstance(exc, RateLimitError):
-        return True
-    if isinstance(exc, APIStatusError) and exc.status_code in _FALLBACK_STATUS_CODES:
-        return True
-    return False
-
-
-def _is_payment_error(exc: Exception) -> bool:
-    """判断是否为余额不足错误 (402)。"""
-    return isinstance(exc, APIStatusError) and exc.status_code == 402
 
 
 # ---------------------------------------------------------------------------
@@ -386,8 +370,6 @@ class ChatAgent:
             return {}
         if not model_supports_thinking(provider, model):
             return {}
-        if provider == "openrouter":
-            return {"reasoning": {"enabled": True}}
         return {"reasoning": {"enabled": True}}
 
     def reload_config(self) -> None:
