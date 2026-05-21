@@ -25,7 +25,10 @@ except ImportError:
 from agent.commands import command_registry, CommandContext, DispatchResult
 from agent.config_manager import run_config_wizard, set_thinking_enabled, model_supports_thinking
 from agent.logger import setup_logging, get_logger
-from agent.pet import get_pet, maybe_greet_on_startup, stage_up_quote, secret_unlock_animation
+from agent.pet import (
+    get_pet, maybe_greet_on_startup, stage_up_quote,
+    secret_unlock_animation, secret_fox_unlock_animation, secret_dog_unlock_animation,
+)
 from agent.role_manager import RoleManager, MAX_ROLES, MAX_LINES
 from agent.terminal_renderer import AssistantStreamRenderer
 
@@ -629,11 +632,14 @@ def _show_help(console: Console) -> None:
         "  [dim]/exit  /quit[/dim]   → 退出程序（也可按 Ctrl+C）\n"
         "  [dim]/coffee[/dim]        → ☕ 彩蛋\n"
         "  [dim]/motor[/dim]         → ⚡ 彩蛋\n"
-        "  [dim]/pet[/dim]           → 🐾 召唤你的仿真宠物（显示完整形象与状态）\n"
-        "  [dim]/pet feed[/dim]      → 🍜 喂食宠物\n"
-        "  [dim]/pet pat[/dim]       → 💛 摸摸宠物\n"
-        "  [dim]/pet talk[/dim]      → 💬 与宠物对话（输入 /q 退出）\n"
-        "  [dim]/pet rename <名>[/dim] → ✏️  给宠物改名",
+        "  [dim]/pet[/dim]                → 🐾 召唤你的仿真宠物（显示完整形象与状态）\n"
+        "  [dim]/pet feed[/dim]           → 🍜 喂食宠物\n"
+        "  [dim]/pet pat[/dim]            → 💛 摸摸宠物\n"
+        "  [dim]/pet rest[/dim]           → 💤 让宠物休息（精力+40）\n"
+        "  [dim]/pet play[/dim]           → 🎮 猜数字游戏（每天3次）\n"
+        "  [dim]/pet choose <名>[/dim]    → 🔄 切换宠物（安安/氟氟/马普）\n"
+        "  [dim]/pet talk[/dim]           → 💬 与宠物对话（输入 /q 退出）\n"
+        "  [dim]/pet rename <名>[/dim]    → ✏️  给宠物改名",
         title="其他命令",
         border_style="dim",
         padding=(0, 2),
@@ -871,18 +877,24 @@ def _run_pet_talk(console: Console, agent_ref, pet) -> None:
 def _handle_pet(ctx: CommandContext) -> str:
     """宠物系统命令处理。
 
-    /pet              — 召唤宠物（显示完整形象 + 状态）
-    /pet feed         — 喂食
-    /pet pat          — 摸摸
-    /pet rename <名>  — 重命名
-    /pet talk         — 进入与宠物的对话模式
-    /pet status       — 纯文字状态（与 /pet 相同）
+    /pet                  — 召唤宠物（显示完整形象 + 状态）
+    /pet feed             — 喂食
+    /pet pat              — 摸摸
+    /pet rest             — 让宠物休息（精力+40，心情-5）
+    /pet play             — 和宠物玩猜数字游戏（每天最多3次）
+    /pet rename <名>      — 重命名
+    /pet choose <类型>    — 切换宠物（安安/氟氟/马普）
+    /pet talk             — 进入与宠物的对话模式
+    /pet status           — 纯文字状态（与 /pet 相同）
     """
     pet = get_pet()
     raw_args = (ctx.args or "").strip()
     parts = raw_args.split(None, 1)
     sub = parts[0].lower() if parts else ""
     sub_arg = parts[1] if len(parts) > 1 else ""
+
+    color = pet.pet_color
+    emoji = pet.pet_emoji
 
     if sub in ("feed", "喂食", "喂"):
         sprite, msg = pet.feed()
@@ -898,9 +910,70 @@ def _handle_pet(ctx: CommandContext) -> str:
         ctx.console.print(Panel(
             pet.build_action_panel(sprite, msg),
             title=f"💛 摸摸 {pet.name}",
-            border_style="magenta",
+            border_style=color,
             padding=(0, 2),
         ))
+
+    elif sub in ("rest", "休息", "睡觉", "睡"):
+        sprite, msg = pet.rest()
+        ctx.console.print(Panel(
+            pet.build_action_panel(sprite, msg),
+            title=f"💤 {pet.name} 休息中",
+            border_style="dim",
+            padding=(0, 2),
+        ))
+
+    elif sub in ("play", "玩", "游戏", "猜"):
+        sprite, prompt, target = pet.play()
+        if target == -1:
+            ctx.console.print(Panel(
+                pet.build_action_panel(sprite, f"  {prompt}"),
+                title=f"{emoji} {pet.name}",
+                border_style=color,
+                padding=(0, 2),
+            ))
+        else:
+            ctx.console.print(Panel(
+                pet.build_action_panel(sprite, f"  {prompt}"),
+                title=f"🎮 {pet.name} 的猜数字游戏",
+                border_style=color,
+                padding=(0, 2),
+            ))
+            import sys as _sys
+            try:
+                if _PTK_AVAILABLE:
+                    from prompt_toolkit import PromptSession
+                    ptk_sess = PromptSession()
+                    guess_str = ptk_sess.prompt("  你猜（1-10）> ").strip()
+                else:
+                    ctx.console.print("  你猜（1-10）> ", end="")
+                    guess_str = _sys.stdin.readline().strip()
+                guess = int(guess_str)
+                _, result_msg = pet.play_result(guess, target)
+                ctx.console.print(Panel(
+                    pet.build_action_panel(pet.sprite, f"  {result_msg}"),
+                    title=f"🎮 游戏结果",
+                    border_style="cyan",
+                    padding=(0, 2),
+                ))
+            except (ValueError, EOFError, KeyboardInterrupt):
+                ctx.console.print(f"[yellow]（游戏已取消）[/yellow]")
+
+    elif sub in ("choose", "切换", "选择", "换"):
+        if not sub_arg:
+            ctx.console.print("[yellow]用法：/pet choose <安安|氟氟|马普>[/yellow]")
+        else:
+            ok, msg = pet.choose_pet(sub_arg)
+            if ok:
+                new_pet = get_pet()
+                ctx.console.print(Panel(
+                    new_pet.build_panel_content(),
+                    title=f"{new_pet.pet_emoji}  {new_pet.name}  ·  欢迎新伙伴！",
+                    border_style=new_pet.pet_color,
+                    padding=(0, 2),
+                ))
+            else:
+                ctx.console.print(f"[red]{msg}[/red]")
 
     elif sub in ("rename", "改名", "重命名"):
         if not sub_arg:
@@ -910,7 +983,7 @@ def _handle_pet(ctx: CommandContext) -> str:
             if ok:
                 ctx.console.print(Panel(
                     pet.build_action_panel(pet.sprite, f"  ✨ {msg}"),
-                    title=f"🐾 {pet.name}",
+                    title=f"{emoji} {pet.name}",
                     border_style="cyan",
                     padding=(0, 2),
                 ))
@@ -921,33 +994,37 @@ def _handle_pet(ctx: CommandContext) -> str:
         _run_pet_talk(ctx.console, ctx.agent, pet)
 
     elif sub in ("", "status", "状态", "召唤"):
-        # 主命令：生成完整宠物卡片
         _, title = pet.stage
         ctx.console.print(Panel(
             pet.build_panel_content(),
-            title=f"🐾  {pet.name}  ·  {title}",
-            border_style="magenta",
+            title=f"{emoji}  {pet.name}  ·  {title}",
+            border_style=color,
             padding=(0, 2),
         ))
 
     else:
         ctx.console.print(
-            "[yellow]用法：/pet | /pet feed | /pet pat | /pet rename <名字> | /pet talk[/yellow]"
+            "[yellow]用法：/pet | /pet feed | /pet pat | /pet rest | /pet play | "
+            "/pet choose <安安|氟氟|马普> | /pet rename <名字> | /pet talk[/yellow]"
         )
 
     return DispatchResult.HANDLED
 
 
 def _handle_bugpet(ctx: CommandContext) -> str:
-    """隐藏命令：将宠物升级为「量子 Maxwell」形态。不在帮助/补全中显示。"""
+    """隐藏命令：将安安升级为「量子 Maxwell」形态。不在帮助/补全中显示。"""
     import time
     pet = get_pet()
+
+    if pet.pet_type != "maxwell_cat":
+        ctx.console.print(
+            f"[yellow]  /bugpet 只对安安（电磁猫）有效。当前宠物是 {pet.name}。[/yellow]"
+        )
+        return DispatchResult.HANDLED
 
     already = not pet.unlock_secret()
 
     if already:
-        # 已经是隐藏形态，直接展示
-        _, title_str = pet.stage
         ctx.console.print(Panel(
             pet.build_panel_content(),
             title=f"⚛  {pet.name}  ·  量子 Maxwell 形态",
@@ -959,12 +1036,10 @@ def _handle_bugpet(ctx: CommandContext) -> str:
         )
         return DispatchResult.HANDLED
 
-    # 首次解锁：播放动画
     for line in secret_unlock_animation():
         ctx.console.print(line)
         time.sleep(0.18)
 
-    # 展示新形象
     sprite_block = "\n".join("  " + l for l in pet.sprite.splitlines())
     ctx.console.print(Panel(
         f"{sprite_block}\n"
@@ -1300,18 +1375,23 @@ def _register_commands(agent) -> None:
     r.register("/embed",   "管理嵌入模型配置（提供商/模型/API Key）", _handle_embed)
     r.register("/coffee",  "☕ 彩蛋",                           _handle_coffee)
     r.register("/motor",   "⚡ 彩蛋",                           _handle_motor)
-    r.register("/pet",     "🐾 查看/喂食/摸摸你的仿真宠物安安", _handle_pet)
-    r.register("/bugpet",  "",                                   _handle_bugpet)
+    r.register("/pet",     "🐾 查看/互动你的仿真宠物（安安/氟氟/马普）", _handle_pet)
+    r.register("/bugpet",  "",                                       _handle_bugpet)
 
     # 子命令 / 带参数用法的补全提示（不参与路由，仅出现在补全菜单）
     r.register_hint("/thinking on",      "开启 thinking / reasoning 模式")
     r.register_hint("/thinking off",     "关闭 thinking / reasoning 模式")
     r.register_hint("/thinking status",  "查看 thinking 当前状态")
     r.register_hint("/history 10",       "查看最近 10 条对话记录")
-    r.register_hint("/pet feed",         "🍜 喂食宠物")
-    r.register_hint("/pet pat",          "💛 摸摸宠物")
-    r.register_hint("/pet talk",         "💬 与宠物对话")
-    r.register_hint("/pet rename",       "✏️  给宠物改名")
+    r.register_hint("/pet feed",          "🍜 喂食宠物")
+    r.register_hint("/pet pat",           "💛 摸摸宠物")
+    r.register_hint("/pet rest",          "💤 让宠物休息（精力+40）")
+    r.register_hint("/pet play",          "🎮 猜数字游戏（每天3次）")
+    r.register_hint("/pet choose 安安",   "🐱 切换到电磁猫安安")
+    r.register_hint("/pet choose 氟氟",   "🦊 切换到流体狐氟氟")
+    r.register_hint("/pet choose 马普",   "🐶 切换到结构犬马普")
+    r.register_hint("/pet talk",          "💬 与宠物对话")
+    r.register_hint("/pet rename",        "✏️  给宠物改名")
     r.register_hint("/embed config",     "查看当前嵌入配置")
     r.register_hint("/embed provider",   "切换嵌入提供商（local/siliconflow/自定义）")
     r.register_hint("/embed model",      "设置嵌入模型名称")
@@ -1413,16 +1493,18 @@ def cli(prompt: str | None):
                     new_stage_key = pet.record_sim()
                     if new_stage_key:
                         stage_name, title = pet.stage
-                        quote = stage_up_quote(new_stage_key)
+                        quote = stage_up_quote(new_stage_key, pet.pet_type)
                         sprite_block = "\n".join(
                             "  " + l for l in pet.sprite.splitlines()
                         )
+                        new_skill = pet._check_skill_unlock(new_stage_key)
+                        skill_line = f"\n  🔮 新技能解锁：[bold green]{new_skill}[/bold green]" if new_skill else ""
                         console.print(Panel(
                             f"{sprite_block}\n\n"
-                            f"  🎉 [bold]{pet.name}[/bold] 进化到了 [cyan]{stage_name}[/cyan]！\n"
-                            f"  🏅 称号解锁：[bold yellow]{title}[/bold yellow]\n\n"
+                            f"  🎉 [bold]{pet.name}[/bold] 进化到了 [{pet.pet_color}]{stage_name}[/{pet.pet_color}]！\n"
+                            f"  🏅 称号解锁：[bold yellow]{title}[/bold yellow]{skill_line}\n\n"
                             f"  💬 [italic yellow]{quote}[/italic yellow]",
-                            title="🐾 宠物成长！",
+                            title=f"{pet.pet_emoji} 宠物成长！",
                             border_style="bright_magenta",
                             padding=(0, 2),
                         ))
