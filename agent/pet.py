@@ -1514,6 +1514,14 @@ class PetState:
 
     def play_result(self, guess: int, target: int) -> tuple[str, str]:
         """处理猜数字结果。返回 (sprite, 结果消息)。"""
+        # 输入验证
+        if not isinstance(guess, int) or not isinstance(target, int):
+            return self.sprite, "「游戏参数错误！请重新开始游戏。」"
+        if guess < 1 or guess > 10:
+            return self.sprite, f"「猜的数字必须在 1~10 之间哦！你猜的是 {guess}，超出范围啦～」"
+        if target < 1 or target > 10:
+            return self.sprite, "「游戏参数错误！目标数字超出范围，请重新开始。」"
+        
         if guess == target:
             mood_gain = 25
             self.mood = min(self.mood_cap, self.mood + mood_gain)
@@ -1541,7 +1549,18 @@ class PetState:
 
     def choose_pet(self, type_key: str) -> tuple[bool, str]:
         """切换宠物种类。返回 (成功, 消息)。"""
-        resolved = PET_TYPE_ALIASES.get(type_key.strip())
+        # 增强输入清理：去除空格、统一小写
+        type_key_clean = type_key.strip()
+        resolved = PET_TYPE_ALIASES.get(type_key_clean)
+        
+        # 如果直接匹配失败，尝试大小写不敏感匹配
+        if resolved is None:
+            type_key_lower = type_key_clean.lower()
+            for alias, pet_type in PET_TYPE_ALIASES.items():
+                if alias.lower() == type_key_lower:
+                    resolved = pet_type
+                    break
+        
         if resolved is None:
             return False, f"找不到叫「{type_key}」的伙伴！可选：安安（猫）、氟氟（狐）、马普（狗）"
         if resolved == self.pet_type:

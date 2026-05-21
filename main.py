@@ -948,7 +948,24 @@ def _handle_pet(ctx: CommandContext) -> str:
                 else:
                     ctx.console.print("  你猜（1-10）> ", end="")
                     guess_str = _sys.stdin.readline().strip()
-                guess = int(guess_str)
+                
+                # 验证输入
+                if not guess_str:
+                    ctx.console.print("[yellow]（游戏已取消）[/yellow]")
+                    return
+                
+                # 尝试转换为整数
+                try:
+                    guess = int(guess_str)
+                except ValueError:
+                    ctx.console.print(f"[red]请输入有效的整数（1-10），你输入的是「{guess_str}」[/red]")
+                    return
+                
+                # 范围验证
+                if not (1 <= guess <= 10):
+                    ctx.console.print(f"[red]数字必须在 1-10 范围内！你输入的是 {guess}[/red]")
+                    return
+                
                 _, result_msg = pet.play_result(guess, target)
                 ctx.console.print(Panel(
                     pet.build_action_panel(pet.sprite, f"  {result_msg}"),
@@ -956,7 +973,7 @@ def _handle_pet(ctx: CommandContext) -> str:
                     border_style="cyan",
                     padding=(0, 2),
                 ))
-            except (ValueError, EOFError, KeyboardInterrupt):
+            except (EOFError, KeyboardInterrupt):
                 ctx.console.print(f"[yellow]（游戏已取消）[/yellow]")
 
     elif sub in ("choose", "切换", "选择", "换"):
