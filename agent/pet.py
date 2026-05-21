@@ -1151,6 +1151,19 @@ class PetState:
         if self._path.exists():
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
+                
+                # 检测旧版本存档并备份
+                old_fields = ["name", "hunger", "mood", "sim_count", "interact_count"]
+                new_fields = ["pet_type", "stamina", "skills", "is_secret", "is_secret_fox", "is_secret_dog"]
+                is_old_version = all(k in data for k in old_fields) and not any(k in data for k in new_fields)
+                
+                if is_old_version:
+                    # 备份旧存档
+                    backup_path = self._path.with_suffix(".json.bak")
+                    backup_path.write_text(self._path.read_text(encoding="utf-8"), encoding="utf-8")
+                    print(f"📦 检测到旧版本宠物存档，已自动备份到 {backup_path}")
+                    print(f"   已升级到新格式（新增 pet_type, stamina, skills 等字段）")
+                
                 self.pet_type           = data.get("pet_type", "maxwell_cat")
                 self.name               = data.get("name", self.DEFAULT_NAME)
                 self.hunger             = int(data.get("hunger", 100))
@@ -1171,8 +1184,8 @@ class PetState:
                 self.is_secret_dog      = bool(data.get("is_secret_dog", False))
                 self._apply_time_decay(data.get("last_save", ""))
                 self._reset_play_count_if_new_day()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️  宠物存档加载失败：{e}，将使用默认值")
 
     def _save(self) -> None:
         try:

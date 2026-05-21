@@ -48,6 +48,17 @@ def _get_model_state(app) -> dict:
 
 
 def _infer_phase_conductors(app, phase_name: str, grouping_strategy: str = "three_phase_equal_spacing") -> list[str]:
+    """
+    自动推断相绕组包含的导体对象。
+    
+    Args:
+        app: Maxwell 应用实例
+        phase_name: 相名称（如 "PhaseA", "A", "PHASEB" 等）
+        grouping_strategy: 分组策略，目前仅支持 "three_phase_equal_spacing"
+    
+    Returns:
+        list[str]: 导体对象名称列表，如 ["Conductor_1", "Conductor_4", ...]
+    """
     if grouping_strategy == "manual_only":
         return []
     if grouping_strategy != "three_phase_equal_spacing":
@@ -56,73 +67,187 @@ def _infer_phase_conductors(app, phase_name: str, grouping_strategy: str = "thre
     state = _get_model_state(app)
     geometry = state.get("geometry", {})
     num_slots = geometry.get("num_slots")
-    if not num_slots or num_slots % 3 != 0:
+    num_poles = geometry.get("num_poles")
+    
+    if not num_slots or num_slots < 3:
         return []
-
+    
+    # 支持多种相命名方式
     phase_index_map = {
-        "PHASEA": 0,
-        "A": 0,
-        "PHASEB": 1,
-        "B": 1,
-        "PHASEC": 2,
-        "C": 2,
+        "PHASEA": 0, "A": 0, "PHA": 0, "U": 0,
+        "PHASEB": 1, "B": 1, "PHB": 1, "V": 1,
+        "PHASEC": 2, "C": 2, "PHC": 2, "W": 2,
     }
     phase_index = phase_index_map.get(phase_name.upper())
     if phase_index is None:
         return []
-
+    
+    # 计算极对数和每极每相槽数
+    pole_pairs = num_poles // 2
+    slots_per_pole_per_phase = num_slots / (num_poles * 3)
+    
     conductors = []
     modeler = getattr(app, "modeler", None)
-    get_object = getattr(modeler, "get_object_from_name", None)
-    for slot_idx in range(phase_index + 1, num_slots + 1, 3):
-        conductor_name = f"Conductor_{slot_idx}"
-        if callable(get_object) and get_object(conductor_name) is None:
-            return []
-        conductors.append(conductor_name)
+    get_object = getattr(modeler, "get_object_from_name", None) if modeler else None
+    
+    # 对于三相电机，按 120 度电角度分布推断导体
+    # 每个相的导体间隔 = 极对数 * 3
+    phase_pitch = pole_pairs * 3
+    
+    # 检查槽数是否为 3 的倍数（三相电机基本要求）
+    if num_slots % 3 == 0:
+        # 标准三相分布：每相导体间隔 3 个槽
+        for slot_idx in range(phase_index + 1, num_slots + 1, 3):
+            conductor_name = f"Conductor_{slot_idx}"
+            if callable(get_object) and get_object(conductor_name) is None:
+                # 如果标准命名不存在，尝试跳过
+                continue
+            conductors.append(conductor_name)
+    else:
+        # 非标准槽数（如 8 槽 6 极），按电角度分布推断
+        # 每个槽的电角度 = 360 * 极对数 / 槽数
+        electrical_angle_per_slot = 360.0 * pole_pairs / num_slots
+        
+        for slot_idx in range(1, num_slots + 1):
+            # 计算该槽相对于 A 相起始位置的电角度差
+            electrical_angle = (slot_idx - 1) * electrical_angle_per_slot
+            # 归一化到 [0, 360)
+            electrical_angle = electrical_angle % 360
+            
+            # 判断是否属于当前相（每相占 120 度电角度范围）
+            phase_start = phase_index * 120
+            phase_end = (phase_index + 1) * 120
+            
+            if phase_start <= electrical_angle < phase_end:
+                conductor_name = f"Conductor_{slot_idx}"
+                if callable(get_object) and get_object(conductor_name) is None:
+                    continue
+                conductors.append(conductor_name)
+    
     return conductors
 
 
 def _apply_magnetization(app, magnet_name: str, angle_deg: float) -> bool:
+    """
+    为永磁体施加磁化方向。
+    
+    Args:
+        app: Maxwell 应用实例
+        magnet_name: 磁体对象名称
+        angle_deg: 磁化方向角度（度），相对于全局坐标系 X 轴
+    
+    Returns:
+        bool: 成功返回 True，否则返回 False
+    """
     angle_value = f"{angle_deg}deg"
-    candidates = [
-        lambda: app.assign_magnetization(assignment=[magnet_name], direction=angle_value),
-        lambda: app.assign_magnetization(magnet_name, angle=angle_value),
-        lambda: app.modeler.get_object_from_name(magnet_name).set_magnetization(angle_value),
-        lambda: setattr(app.modeler.get_object_from_name(magnet_name), "magnetization_angle", angle_value),
-    ]
-    for setter in candidates:
+    
+    # 优先尝试标准接口（PyAEDT 0.6+）
+    if hasattr(app, "assign_magnetization"):
         try:
-            setter()
+            # 尝试标准参数格式
+            app.assign_magnetization(
+                assignment=[magnet_name],
+                direction=angle_value,
+                coordinate_system="Global"
+            )
             return True
         except Exception:
-            continue
+            pass
+        
+        try:
+            # 尝试旧版本参数格式
+            app.assign_magnetization(magnet_name, angle=angle_value)
+            return True
+        except Exception:
+            pass
+    
+    # 回退到对象级设置
+    try:
+        obj = app.modeler.get_object_from_name(magnet_name)
+        if obj and hasattr(obj, "set_magnetization"):
+            obj.set_magnetization(angle_value)
+            return True
+    except Exception:
+        pass
+    
+    # 最终回退：直接设置属性（兼容性最好但可靠性最低）
+    try:
+        obj = app.modeler.get_object_from_name(magnet_name)
+        if obj:
+            setattr(obj, "magnetization_angle", angle_value)
+            return True
+    except Exception:
+        pass
+    
     return False
 
 
 def _configure_rotation_motion(app, rotor_name: str, airgap_name: str) -> bool:
-    candidates = [
-        lambda: app.assign_rotate_motion(
-            assignment=[rotor_name],
-            coordinate_system="Global",
-            axis="Z",
-            positive_movement=True,
-        ),
-        lambda: app.assign_rotation(
-            object_list=[rotor_name],
-            axis="Z",
-        ),
-        lambda: app.modeler.create_band(
-            rotor_name=rotor_name,
-            airgap_name=airgap_name,
-            band_name="MotionBand",
-        ),
-    ]
-    for setter in candidates:
-        try:
-            setter()
+    """
+    配置旋转运动设置，包括运动带（Band）和旋转边界条件。
+    
+    Args:
+        app: Maxwell 应用实例
+        rotor_name: 转子对象名称（包含永磁体）
+        airgap_name: 气隙对象名称
+    
+    Returns:
+        bool: 成功返回 True，否则返回 False
+    """
+    # 策略 1: 使用标准 Band 接口（最可靠）
+    try:
+        # PyAEDT 0.6+ 标准接口
+        modeler = app.modeler
+        if hasattr(modeler, "create_band"):
+            # 创建运动带，自动包含旋转轴和边界条件
+            modeler.create_band(
+                rotor_object=rotor_name,
+                airgap_object=airgap_name,
+                band_name="MotionBand",
+                axis="Z",
+                origin=[0, 0, 0],
+            )
             return True
-        except Exception:
-            continue
+    except Exception:
+        pass
+    
+    # 策略 2: 手动创建 Band 区域并设置运动边界
+    try:
+        modeler = app.modeler
+        # 创建 Band 区域（包围转子的环形区域）
+        band_obj = modeler.create_circle(
+            origin=[0, 0, 0],
+            radius=f"{rotor_name}.OuterRadius + 0.5mm",  # 略大于转子外径
+            name="Band",
+            material="vacuum",
+        )
+        # 从气隙中减去 Band 区域
+        modeler.subtract(airgap_name, "Band", keep_originals=False)
+        
+        # 设置旋转运动边界
+        if hasattr(app, "assign_rotate_motion"):
+            app.assign_rotate_motion(
+                assignment=[rotor_name],
+                coordinate_system="Global",
+                axis="Z",
+                positive_movement=True,
+            )
+            return True
+    except Exception:
+        pass
+    
+    # 策略 3: 简化版本（仅设置旋转，不创建 Band）
+    try:
+        if hasattr(app, "assign_rotation"):
+            app.assign_rotation(
+                object_list=[rotor_name],
+                axis="Z",
+                speed="3000rpm",  # 默认转速
+            )
+            return True
+    except Exception:
+        pass
+    
     return False
 
 
@@ -448,7 +573,9 @@ def create_motor_geometry(
             start_angle = i * pole_angle - magnet_arc / 2
             end_angle = start_angle + magnet_arc
             obj_name = f"Magnet_{i+1}"
-            magnetization_angle = i * pole_angle if i % 2 == 0 else i * pole_angle + 180.0
+            # 修复：相邻磁极磁化方向严格 N-S 交替
+            # 第 0 极：0 度，第 1 极：180 度，第 2 极：360 度（=0 度），以此类推
+            magnetization_angle = (i % 2) * 180.0
 
             # 外弧点列（start_angle → end_angle）
             outer_pts = [
@@ -666,15 +793,17 @@ def setup_winding(
                 coil_name = coil_result
             coil_terminals.append(coil_name or conductor_name)
         # 始终使用 "Current" 类型：
-        #   - 磁静态（frequency=0）：直流电流表达式 "XA"
+        #   - 磁静态（frequency=0）：直流电流表达式 "电流值 A"
         #   - 瞬态/交流（frequency>0）：正弦电流表达式（Maxwell 内嵌函数）
         # "External" 类型需要配合 Circuit 联仿，独立使用时 AEDT 会报配置错误。
         if frequency > 0:
+            # 瞬态/交流：使用余弦表达式，频率单位为 Hz，相位单位为度
             current_expr = (
                 f"{current_amplitude}*cos(2*pi*{frequency}*Time"
                 f"+{phase_angle}*pi/180)A"
             )
         else:
+            # 磁静态：直流电流，直接使用幅值
             current_expr = f"{current_amplitude}A"
         winding_kwargs = {
             "coil_terminals": coil_terminals,
@@ -693,6 +822,7 @@ def setup_winding(
         try:
             app.assign_winding(**winding_kwargs)
         except TypeError:
+            # 旧版本 AEDT 可能不支持某些可选参数，回退到最小参数集
             for field_name in list(optional_winding_fields):
                 winding_kwargs.pop(field_name, None)
             app.assign_winding(**winding_kwargs)
@@ -749,11 +879,38 @@ def add_solution_setup(
         app = _app()
         if num_passes <= 0:
             return _err("num_passes 必须为正整数")
+        
+        # 检查是否已存在同名 setup
+        existing_setups = _get_setup_names(app)
+        if setup_name in existing_setups:
+            return _err(f"求解设置 '{setup_name}' 已存在，请使用不同的名称或删除已有设置")
+        
         if solver_type == "Transient":
             if stop_time <= 0 or time_step <= 0:
                 return _err("Transient 求解要求 stop_time 和 time_step 都为正值")
             if time_step >= stop_time:
                 return _err("Transient 求解要求 time_step 小于 stop_time")
+            
+            # 验证是否覆盖至少一个电周期（对于交流电机）
+            # 电周期 T = 1/f，其中 f = 转速 (rpm) * 极对数 / 60
+            # 典型设计：3000rpm, 3 对极 → f = 150Hz → T = 0.0067s
+            # 建议 stop_time >= 2 * T 以获取稳态结果
+            if stop_time < 0.001:
+                return _err(
+                    f"stop_time={stop_time}s 过短，可能无法覆盖至少一个电周期。\n"
+                    f"建议：对于 50Hz 电机，stop_time >= 0.02s（一个周期）；"
+                    f"对于 150Hz 电机，stop_time >= 0.013s。"
+                )
+            
+            # 验证时间步长合理性（每个电周期至少 20 点）
+            num_points = stop_time / time_step
+            if num_points < 20:
+                return _err(
+                    f"time_step={time_step}s 过大，导致整个仿真仅有 {num_points:.0f} 个时间点。\n"
+                    f"建议：time_step <= stop_time / 50 = {stop_time / 50:.6f}s，"
+                    f"以保证足够的波形分辨率。"
+                )
+                
         if solver_type == "EddyCurrent" and frequency_Hz <= 0:
             return _err("EddyCurrent 求解要求 frequency_Hz 为正值")
 

@@ -24,7 +24,18 @@ class MaxwellAgent(SubAgentBase):
         )
 
     def _infer_maxwell_flow(self, task: str) -> tuple[str, list[str]]:
+        """
+        根据任务描述推断 Maxwell 工作流类型和执行清单。
+        
+        Args:
+            task: 用户任务描述
+        
+        Returns:
+            tuple[str, list[str]]: (工作流类型名称，执行检查清单)
+        """
         text = task.lower()
+        
+        # 否定词检测：如果是取消/删除操作，走通用流程
         if self.has_negative_words(text):
             return "general_analysis", [
                 "确认当前项目、设计和求解前置条件",
@@ -32,29 +43,61 @@ class MaxwellAgent(SubAgentBase):
                 "执行求解并提取用户请求的结果",
             ]
         
-        if any(token in text for token in ("效率", "efficiency", "map", "扫描", "sweep", "优化", "optimization")):
-            return "performance_map", [
+        # 多任务组合检测：如果包含多个关键词，按优先级排序
+        tasks = []
+        
+        # 1. 效率 MAP/参数扫描（优先级最高，因为需要完整的建模 + 求解 + 后处理）
+        if any(token in text for token in ("效率", "efficiency", "map", "扫描", "sweep", "优化", "optimization", "parametric")):
+            tasks.append(("performance_map", [
                 "检查现有设计变量和已求解 setup",
                 "必要时创建参数扫描或效率 MAP",
                 "执行求解并收集扭矩/损耗/效率结果",
-            ]
-        if any(token in text for token in ("反电动势", "back emf", "bemf", "瞬态", "transient")):
-            return "transient_postprocess", [
+            ]))
+        
+        # 2. 反电动势/瞬态分析
+        if any(token in text for token in ("反电动势", "back emf", "bemf", "瞬态", "transient", "波形")):
+            tasks.append(("transient_postprocess", [
                 "确认或建立瞬态求解设置",
                 "运行求解并提取 Back EMF/波形数据",
                 "校验结果是否已导出或可复用",
-            ]
-        if any(token in text for token in ("建模", "geometry", "pmsm", "电机", "槽", "极")):
-            return "model_building", [
+            ]))
+        
+        # 3. 建模任务（基础任务，优先级最低）
+        if any(token in text for token in ("建模", "geometry", "pmsm", "电机", "槽", "极", "创建", "建立")):
+            tasks.append(("model_building", [
                 "连接 AEDT 或打开现有项目",
                 "建立或修正几何/材料/绕组/网格",
                 "补充求解设置并在需要时运行校验求解",
+            ]))
+        
+        # 4. 结果提取（单独一类）
+        if any(token in text for token in ("提取", "结果", "torque", "损耗", "loss", "电感", "inductance")):
+            if not tasks:  # 仅当没有其他任务时才单独列出
+                tasks.append(("result_extraction", [
+                    "确认已完成求解",
+                    "提取用户请求的结果（转矩/反电动势/损耗/电感等）",
+                    "必要时导出结果数据",
+                ]))
+        
+        # 如果没有匹配到特定任务，走通用流程
+        if not tasks:
+            return "general_analysis", [
+                "确认当前项目、设计和求解前置条件",
+                "按需配置模型/网格/边界/设置",
+                "执行求解并提取用户请求的结果",
             ]
-        return "general_analysis", [
-            "确认当前项目、设计和求解前置条件",
-            "按需配置模型/网格/边界/设置",
-            "执行求解并提取用户请求的结果",
-        ]
+        
+        # 如果只有一个任务，直接返回
+        if len(tasks) == 1:
+            return tasks[0]
+        
+        # 多个任务组合：返回复合类型，合并检查清单
+        flow_names = [t[0] for t in tasks]
+        combined_checklist = []
+        for _, checklist in tasks:
+            combined_checklist.extend(checklist)
+        
+        return ("+".join(flow_names), combined_checklist)
 
     def build_execution_plan(self, task: str, context: str = "") -> str:
         flow_name, checklist = self._infer_maxwell_flow(task)

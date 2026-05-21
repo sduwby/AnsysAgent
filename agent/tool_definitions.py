@@ -55,6 +55,7 @@ from tools import (
 
 TOOL_REGISTRY: dict[str, callable] = {
     "connect_aedt": maxwell_tools.connect_aedt,
+    "disconnect_aedt": maxwell_tools.disconnect_aedt,
     "create_maxwell_project": maxwell_tools.create_maxwell_project,
     "create_motor_geometry": maxwell_tools.create_motor_geometry,
     "assign_material": maxwell_tools.assign_material,
@@ -451,7 +452,7 @@ TOOL_DEFINITIONS = (
 
 _MAXWELL_TOOL_NAMES: frozenset[str] = frozenset({
     # AEDT 连接 & 建模
-    "connect_aedt", "create_maxwell_project", "create_motor_geometry",
+    "connect_aedt", "disconnect_aedt", "create_maxwell_project", "create_motor_geometry",
     "assign_material", "setup_winding", "add_solution_setup", "run_simulation",
     # 结果提取
     "get_torque", "get_back_emf", "get_flux_density", "get_losses", "export_results",
