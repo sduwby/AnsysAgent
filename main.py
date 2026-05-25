@@ -4,7 +4,9 @@ AnsysAgent - Maxwell 电机电磁仿真助手
 """
 
 import random
+import shutil
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -195,7 +197,7 @@ WELCOME = (
     "  [bold #d7775f]/skills[/bold #d7775f] 管理技能 | "
     "  [bold #d7775f]/mcp[/bold #d7775f] 管理 MCP | "
     "  [bold #d7775f]/exit[/bold #d7775f] 退出[/dim]\n"
-    "[dim]📋 Log viewer: http://localhost:{{_log_port}}[/dim]"
+    "[dim]📋 Log viewer: http://localhost:{port}[/dim]"
 )
 
 
@@ -769,7 +771,6 @@ def _handle_motor(ctx: CommandContext) -> str:
 
 def _run_pet_talk(console: Console, agent_ref, pet) -> None:
     """进入宠物对话子循环，直到用户说再见或 /q 退出。"""
-    import sys as _sys
     from agent.pet_agent import PetAgent
 
     pet_agent = PetAgent(
@@ -808,7 +809,7 @@ def _run_pet_talk(console: Console, agent_ref, pet) -> None:
                 ).strip()
             else:
                 console.print(f"\n[bold yellow]你[/bold yellow]> ", end="")
-                user_input = _sys.stdin.readline().strip()
+                user_input = sys.stdin.readline().strip()
         except (KeyboardInterrupt, EOFError):
             console.print(f"\n[dim]{pet.name}：下次再来陪我玩哦 (・ω・)[/dim]")
             break
@@ -823,7 +824,7 @@ def _run_pet_talk(console: Console, agent_ref, pet) -> None:
         # ── 流式输出宠物回复（逐 token 打字机效果）────────────────────
         # 打出宠物名前缀后立即 flush，确保用户能看到"谁在说话"
         console.print(f"\n[bold magenta]{pet.name}[/bold magenta]> ", end="")
-        _sys.stdout.flush()
+        sys.stdout.flush()
 
         text_buf = ""
         farewell_detected = False
@@ -832,8 +833,8 @@ def _run_pet_talk(console: Console, agent_ref, pet) -> None:
             for chunk in pet_agent.chat_stream(pet, user_input):
                 if chunk.startswith("\x00TOOL\x00"):
                     # 工具调用：换行后显示"翻记忆本"提示
-                    _sys.stdout.write("\n")
-                    _sys.stdout.flush()
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
                     tool_name = chunk[len("\x00TOOL\x00"):].split(":", 1)[0]
                     console.print(
                         f"[dim]🔍 {pet.name} 翻了翻记忆本：[bold]{tool_name}[/bold][/dim]"
@@ -844,24 +845,24 @@ def _run_pet_talk(console: Console, agent_ref, pet) -> None:
                     console.print(f"[{color} dim]  {result_info}[/{color} dim]")
                     # 工具结束后重新打宠物前缀，继续流式输出后续文字
                     console.print(f"\n[bold magenta]{pet.name}[/bold magenta]> ", end="")
-                    _sys.stdout.flush()
+                    sys.stdout.flush()
                 else:
                     # 普通文本 token：直接写入 stdout，逐字符打字机效果
                     text_buf += chunk
-                    _sys.stdout.write(chunk)
-                    _sys.stdout.flush()
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
 
-            _sys.stdout.write("\n")
-            _sys.stdout.flush()
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
         except KeyboardInterrupt:
-            _sys.stdout.write("\n")
-            _sys.stdout.flush()
+            sys.stdout.write("\n")
+            sys.stdout.flush()
             console.print(f"[yellow]（已中断）[/yellow]")
             continue
         except Exception as e:
-            _sys.stdout.write("\n")
-            _sys.stdout.flush()
+            sys.stdout.write("\n")
+            sys.stdout.flush()
             _log.error("宠物对话异常: %s", e, exc_info=True)
             console.print(f"[red]（{pet.name} 好像出了点问题：{e}）[/red]")
             continue
@@ -939,7 +940,6 @@ def _handle_pet(ctx: CommandContext) -> str:
                 border_style=color,
                 padding=(0, 2),
             ))
-            import sys as _sys
             try:
                 if _PTK_AVAILABLE:
                     from prompt_toolkit import PromptSession
@@ -947,23 +947,19 @@ def _handle_pet(ctx: CommandContext) -> str:
                     guess_str = ptk_sess.prompt("  你猜（1-10）> ").strip()
                 else:
                     ctx.console.print("  你猜（1-10）> ", end="")
-                    guess_str = _sys.stdin.readline().strip()
+                    guess_str = sys.stdin.readline().strip()
                 
-                # 验证输入
                 if not guess_str:
                     ctx.console.print("[yellow]（游戏已取消）[/yellow]")
                     return
                 
-                # 尝试转换为整数
                 try:
                     guess = int(guess_str)
+                    if not (1 <= guess <= 10):
+                        ctx.console.print(f"[red]数字必须在 1-10 范围内！你输入的是 {guess}[/red]")
+                        return
                 except ValueError:
                     ctx.console.print(f"[red]请输入有效的整数（1-10），你输入的是「{guess_str}」[/red]")
-                    return
-                
-                # 范围验证
-                if not (1 <= guess <= 10):
-                    ctx.console.print(f"[red]数字必须在 1-10 范围内！你输入的是 {guess}[/red]")
                     return
                 
                 _, result_msg = pet.play_result(guess, target)
@@ -1030,7 +1026,6 @@ def _handle_pet(ctx: CommandContext) -> str:
 
 def _handle_bugpet(ctx: CommandContext) -> str:
     """隐藏命令：将安安升级为「量子 Maxwell」形态。不在帮助/补全中显示。"""
-    import time
     pet = get_pet()
 
     if pet.pet_type != "maxwell_cat":
@@ -1097,6 +1092,7 @@ def _make_config_handler(agent_ref) -> "Callable":
 def _handle_embed(ctx: CommandContext) -> str:
     """处理 /embed 命令，管理嵌入模型配置"""
     from rag.config_manager import run_embedding_wizard, format_config_info, get_current_config
+    from tools.embedding_config_tool import manage_embedding_config
     
     try:
         args = ctx.args.strip()
@@ -1114,36 +1110,28 @@ def _handle_embed(ctx: CommandContext) -> str:
                 # 启动配置向导
                 run_embedding_wizard(ctx.console)
             elif sub_cmd == "provider":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="provider", provider=sub_args.strip())
                 ctx.console.print(result)
             elif sub_cmd == "model":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="model", model=sub_args.strip())
                 ctx.console.print(result)
             elif sub_cmd == "key":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="key", api_key=sub_args.strip())
                 ctx.console.print(result)
             elif sub_cmd == "url":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="url", base_url=sub_args.strip())
                 ctx.console.print(result)
             elif sub_cmd == "models":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="models")
                 ctx.console.print(result)
             elif sub_cmd == "providers":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="providers")
                 ctx.console.print(result)
             elif sub_cmd == "add":
-                from tools.embedding_config_tool import manage_embedding_config
                 custom_args = sub_args.split()
                 result = manage_embedding_config(command="add", custom_args=custom_args)
                 ctx.console.print(result)
             elif sub_cmd == "delete":
-                from tools.embedding_config_tool import manage_embedding_config
                 result = manage_embedding_config(command="delete", provider=sub_args.strip())
                 ctx.console.print(result)
             else:
@@ -1209,7 +1197,6 @@ def _make_clear_handler(agent_ref) -> "Callable":
 
 
 def _handle_purge(ctx: CommandContext) -> str:
-    import shutil
     from agent.paths import ANSYS_DATA_DIR
     ctx.console.print(Panel(
         f"  即将删除：[bold red]{ANSYS_DATA_DIR}[/bold red]\n"
@@ -1367,10 +1354,13 @@ def _register_commands(agent) -> None:
     需要引用 agent 实例的命令通过工厂函数（_make_*_handler）捕获。
 
     注意：此函数在每次 cli() 调用时执行（agent 实例创建之后）。
-    若 cli() 被多次调用（测试场景），可能产生重复注册；
-    生产路径下 cli() 只调用一次，不成问题。
+    通过检查已注册命令防止重复注册。
     """
     from typing import Callable  # noqa: F401
+
+    # 防止重复注册（测试场景或 cli() 多次调用时保护）
+    if command_registry.get("/exit") is not None:
+        return
 
     r = command_registry
 
@@ -1451,7 +1441,7 @@ def cli(prompt: str | None):
 
         # 交互模式
         _log.info("进入交互模式")
-        console.print(Panel.fit(WELCOME, title="🤖 AnsysAgent", border_style="cyan"))
+        console.print(Panel.fit(WELCOME.format(port=_log_port), title="🤖 AnsysAgent", border_style="cyan"))
         _maybe_show_startup_egg()
         maybe_greet_on_startup(console)
 

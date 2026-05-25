@@ -1549,17 +1549,8 @@ class PetState:
 
     def choose_pet(self, type_key: str) -> tuple[bool, str]:
         """切换宠物种类。返回 (成功, 消息)。"""
-        # 增强输入清理：去除空格、统一小写
         type_key_clean = type_key.strip()
         resolved = PET_TYPE_ALIASES.get(type_key_clean)
-        
-        # 如果直接匹配失败，尝试大小写不敏感匹配
-        if resolved is None:
-            type_key_lower = type_key_clean.lower()
-            for alias, pet_type in PET_TYPE_ALIASES.items():
-                if alias.lower() == type_key_lower:
-                    resolved = pet_type
-                    break
         
         if resolved is None:
             return False, f"找不到叫「{type_key}」的伙伴！可选：安安（猫）、氟氟（狐）、马普（狗）"
