@@ -124,7 +124,7 @@ def define_vehicle_params(
             "steering_ratio": steering_ratio,
             "tire_model": tire_model,
             "tire_stiffness_N_mm": tire_stiffness_N_mm,
-            "yaw_inertia_est_kgm2": vehicle_mass_kg * a * b / 1e6,
+            "yaw_inertia_est_kgm2": round(vehicle_mass_kg * ((wheelbase_mm / 1e3) ** 2 + ((front_track_mm + rear_track_mm) / 2.0 / 1e3) ** 2) / 12.0, 2),
         }
 
         _vd_config["vehicle_params"] = params

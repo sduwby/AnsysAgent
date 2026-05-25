@@ -128,16 +128,40 @@ def link_maxwell_to_icepak(
             if avg_core <= 0 and avg_ohmic <= 0:
                 return _err("Maxwell 损耗结果为空或全为 0，无法映射到 Icepak")
 
-            # 设置均匀热源
-            # ⚠️ 重要说明：以下比例为经验值，实际应用中应从 Maxwell 读取各部件实际损耗
-            # TODO: 实现从 Maxwell 自动提取各部件损耗的功能
-            # 建议：使用 get_losses(setup_name) 从 Maxwell 提取各部件损耗，然后按比例分配
-            stator_ratio = 0.9  # 定子铁耗占比（经验值，需根据实际设计调整）
-            rotor_ratio = 0.1   # 转子铁耗占比（经验值，需根据实际设计调整）
+            # 尝试按部件（Stator/Rotor）分别提取铁耗
+            stator_core = None
+            rotor_core = None
+            try:
+                for comp_name in ("Stator", "Rotor"):
+                    comp_data = maxwell_app.post.get_solution_data(
+                        expressions=["CoreLoss"],
+                        setup_sweep_name=f"{setup_name} : LastAdaptive",
+                        object_name=comp_name,
+                    )
+                    comp_vals = comp_data.data_real("CoreLoss")
+                    if comp_vals:
+                        avg = sum(comp_vals) / len(comp_vals)
+                        if comp_name == "Stator":
+                            stator_core = avg
+                        else:
+                            rotor_core = avg
+            except Exception:
+                pass
+
+            if stator_core is None or rotor_core is None:
+                # 回退到经验比例
+                stator_ratio = 0.9
+                rotor_ratio = 0.1
+                stator_core = avg_core * stator_ratio if stator_core is None else stator_core
+                rotor_core = avg_core * rotor_ratio if rotor_core is None else rotor_core
+                fallback_msg = "（使用经验比例，尝试使用空间分布模式可获得更精确结果）"
+            else:
+                fallback_msg = ""
+
             assignment = assign_power_sources(icepak_app, {
                 "Winding": avg_ohmic,
-                "Stator": avg_core * stator_ratio,
-                "Rotor": avg_core * rotor_ratio,
+                "Stator": stator_core,
+                "Rotor": rotor_core,
             })
             assigned_sources = assignment["assigned"]
             assignment_errors = assignment["errors"]
@@ -147,6 +171,8 @@ def link_maxwell_to_icepak(
                     + (f" 失败详情: {'; '.join(assignment_errors)}" if assignment_errors else "")
                 )
             method_desc = f"均匀平均值（铁耗={avg_core:.2f}W，铜耗={avg_ohmic:.2f}W）"
+            if fallback_msg:
+                method_desc += f" {fallback_msg}"
             if assignment_errors:
                 method_desc += f"，部分失败={'; '.join(assignment_errors)}"
 

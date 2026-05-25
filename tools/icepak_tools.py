@@ -17,6 +17,67 @@ def _app():
     return app
 
 
+def _try_extract_component_losses(
+    copper_loss_W: float,
+    iron_loss_W: float,
+    stator_loss_W: float | None,
+    rotor_loss_W: float | None,
+) -> tuple[float, float, str]:
+    """
+    尝试从 Maxwell 按部件提取铁耗。若不可用则回退到经验比例。
+    返回 (stator_loss_W, rotor_loss_W, 警告消息)。
+    """
+    stator_ratio = 0.9
+    rotor_ratio = 0.1
+    warning = ""
+
+    try:
+        from tools.aedt_state import get_maxwell_app
+        maxwell_app = get_maxwell_app()
+        if maxwell_app is not None:
+            # 尝试按对象分别读取 CoreLoss
+            component_losses = {}
+            for obj in ("Stator", "Rotor"):
+                try:
+                    obj_data = maxwell_app.post.get_solution_data(
+                        expressions=["CoreLoss"],
+                        setup_sweep_name="Setup1 : LastAdaptive",
+                        object_name=obj,
+                    )
+                    vals = obj_data.data_real("CoreLoss")
+                    if vals:
+                        component_losses[obj] = sum(vals) / len(vals)
+                except Exception:
+                    pass
+
+            if "Stator" in component_losses and "Rotor" in component_losses:
+                if stator_loss_W is None:
+                    stator_loss_W = component_losses["Stator"]
+                if rotor_loss_W is None:
+                    rotor_loss_W = component_losses["Rotor"]
+                warning = (
+                    f"已从 Maxwell 提取部件级铁耗：定子={stator_loss_W:.2f}W，转子={rotor_loss_W:.2f}W"
+                )
+            else:
+                warning = (
+                    "Maxwell 未返回按部件的损耗数据，"
+                    f"回退经验比例（定子 {int(stator_ratio * 100)}% / 转子 {int(rotor_ratio * 100)}%）"
+                )
+    except Exception:
+        warning = (
+            "无法连接 Maxwell 提取部件级损耗，"
+            f"回退经验比例（定子 {int(stator_ratio * 100)}% / 转子 {int(rotor_ratio * 100)}%）"
+        )
+
+    # 仍未指定则使用经验比例
+    if stator_loss_W is None:
+        stator_loss_W = iron_loss_W * stator_ratio
+    if rotor_loss_W is None:
+        rotor_loss_W = iron_loss_W * rotor_ratio
+
+    return stator_loss_W, rotor_loss_W, warning
+
+
 # ---------------------------------------------------------------------------
 # 工具：connect_icepak - 连接 Icepak
 # ---------------------------------------------------------------------------
@@ -50,6 +111,8 @@ def setup_motor_thermal(
     iron_loss_W: float,
     ambient_temp_C: float = 25.0,
     cooling_type: str = "natural_convection",
+    stator_loss_W: float | None = None,
+    rotor_loss_W: float | None = None,
 ) -> dict:
     """
     在 Icepak 中设置电机热耗散边界条件。
@@ -59,19 +122,27 @@ def setup_motor_thermal(
         iron_loss_W: 铁芯铁耗（W）
         ambient_temp_C: 环境温度（°C）
         cooling_type: 冷却方式，'natural_convection' 或 'forced_convection' 或 'water_jacket'
+        stator_loss_W: 定子铁耗（W），不传则尝试从 Maxwell 自动提取，回退到铁耗的 90%
+        rotor_loss_W: 转子铁耗（W），不传则尝试从 Maxwell 自动提取，回退到铁耗的 10%
     """
     try:
         app = _app()
         # 设置环境温度
         app.modeler.set_working_coordinate_system("Global")
 
-        # 为绕组和铁芯分配热源
-        # TODO: 实现从 Maxwell 自动提取各部件损耗的功能，避免使用经验值比例
-        # 目前使用经验值：定子铁耗 90%，转子铁耗 10%
+        # 确定定子和转子铁耗：优先使用显式参数，其次尝试从 Maxwell 提取，最后回退到经验比例
+        warnings = []
+        if stator_loss_W is None or rotor_loss_W is None:
+            stator_loss_W, rotor_loss_W, msg = _try_extract_component_losses(
+                copper_loss_W, iron_loss_W, stator_loss_W, rotor_loss_W
+            )
+            if msg:
+                warnings.append(msg)
+
         assignment = assign_power_sources(app, {
             "Winding": copper_loss_W,
-            "Stator": iron_loss_W * 0.9,  # TODO: 从 Maxwell 读取实际定子损耗
-            "Rotor": iron_loss_W * 0.1,   # TODO: 从 Maxwell 读取实际转子损耗
+            "Stator": stator_loss_W,
+            "Rotor": rotor_loss_W,
         })
         assigned_sources = [item.split("=", 1)[0] for item in assignment["assigned"]]
         missing_objects = assignment["missing"]
@@ -106,6 +177,8 @@ def setup_motor_thermal(
             msg += f"；未找到对象={', '.join(missing_objects)}"
         if source_errors:
             msg += f"；部分热源分配失败={'; '.join(source_errors)}"
+        if warnings:
+            msg += f"；{'; '.join(warnings)}"
         return _ok(msg)
     except Exception as e:
         return _err(str(e))

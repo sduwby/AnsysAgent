@@ -1552,6 +1552,14 @@ class PetState:
         type_key_clean = type_key.strip()
         resolved = PET_TYPE_ALIASES.get(type_key_clean)
         
+        # 精确匹配失败时，尝试大小写不敏感匹配（主要处理英文别名如 "MAXWELL_CAT"）
+        if resolved is None:
+            type_key_lower = type_key_clean.lower()
+            for alias, pet_type in PET_TYPE_ALIASES.items():
+                if alias.lower() == type_key_lower:
+                    resolved = pet_type
+                    break
+        
         if resolved is None:
             return False, f"找不到叫「{type_key}」的伙伴！可选：安安（猫）、氟氟（狐）、马普（狗）"
         if resolved == self.pet_type:

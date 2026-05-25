@@ -161,6 +161,8 @@ def define_nvh_materials(
             mapdl.mp("EX", material_id, E_pa)
             mapdl.mp("PRXY", material_id, poisson_ratio)
             mapdl.mp("DENS", material_id, density_kg_m3)
+            if loss_factor > 0:
+                mapdl.mp("DPR", material_id, loss_factor)
 
         return _ok(ok_message(
             f"已定义 NVH 材料 {material_id}（{material_type}，η={loss_factor}）",

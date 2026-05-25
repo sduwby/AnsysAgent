@@ -197,26 +197,52 @@ def setup_boundary_conditions(
         mapdl = _mapdl()
         mapdl.prep7()
 
-        if fixed_nodes:
-            if "," in fixed_nodes and not fixed_nodes.startswith("CM"):
-                parts = fixed_nodes.split(",")
-                if len(parts) == 2:
-                    mapdl.nsel("S", "NODE", "", parts[0].strip(), parts[1].strip())
+        if bc_type in ("fixed_free", "fixed_fixed", "simply_supported"):
+            if fixed_nodes:
+                if "," in fixed_nodes and not fixed_nodes.startswith("CM"):
+                    parts = fixed_nodes.split(",")
+                    if len(parts) == 2:
+                        mapdl.nsel("S", "NODE", "", parts[0].strip(), parts[1].strip())
+                    else:
+                        mapdl.cmsel("S", fixed_nodes)
                 else:
                     mapdl.cmsel("S", fixed_nodes)
-            else:
-                mapdl.cmsel("S", fixed_nodes)
 
-            for dof in fixed_dofs.split(","):
-                mapdl.d("ALL", dof.strip(), 0)
-            mapdl.allsel()
+                for dof in fixed_dofs.split(","):
+                    mapdl.d("ALL", dof.strip(), 0)
+                mapdl.allsel()
+
+            if bc_type == "fixed_fixed":
+                if fixed_nodes:
+                    mapdl.allsel()
+                    mapdl.nsel("U", "NODE", "", "", "")
+                    for dof in fixed_dofs.split(","):
+                        mapdl.d("ALL", dof.strip(), 0)
+                    mapdl.allsel()
+
+            if bc_type == "simply_supported":
+                for dof in fixed_dofs.split(","):
+                    dof_clean = dof.strip()
+                    if dof_clean not in ("ROTX", "ROTY", "ROTZ"):
+                        pass
 
         elif bc_type == "symmetric" and symmetric_plane:
             plane_map = {"XY": "Z", "YZ": "X", "XZ": "Y"}
             normal_dof = plane_map.get(symmetric_plane, "Z")
             mapdl.nsel("S", "LOC", normal_dof, 0)
             mapdl.d("ALL", f"U{normal_dof}", 0)
+            mapdl.d("ALL", f"ROT{normal_dof}", 0)
             mapdl.allsel()
+
+        elif bc_type == "springs":
+            if spring_stiffness <= 0:
+                return _err("弹簧刚度必须大于 0")
+            stiffness = spring_stiffness  # N/m
+            mapdl.allsel()
+            for dof in fixed_dofs.split(","):
+                dof_clean = dof.strip()
+                if dof_clean.startswith("U"):
+                    mapdl.k("ALL", dof_clean, stiffness)
 
         _struct_config["bc_type"] = bc_type
 
@@ -225,6 +251,7 @@ def setup_boundary_conditions(
             bc_type=bc_type,
             fixed_nodes=fixed_nodes,
             fixed_dofs=fixed_dofs,
+            spring_stiffness=spring_stiffness if bc_type == "springs" else None,
         ))
     except Exception as e:
         return _err(str(e))
@@ -254,10 +281,30 @@ def apply_bending_load(
     """
     try:
         mapdl = _mapdl()
+        mapdl.prep7()
 
         dir_sign = -1 if load_direction.startswith("-") else 1
         dof = load_direction.replace("-", "")
         actual_force = force_n * dir_sign
+
+        if load_type == "distributed_force":
+            if application_area:
+                mapdl.cmsel("S", application_area)
+                mapdl.desel("S", "NODE")
+                mapdl.f("ALL", f"F{dof}", actual_force)
+                mapdl.allsel()
+        elif load_type == "point_force":
+            if application_area:
+                mapdl.cmsel("S", application_area)
+                mapdl.desel("S", "NODE")
+                mapdl.f("ALL", f"F{dof}", actual_force)
+                mapdl.allsel()
+        elif load_type == "pressure":
+            if application_area:
+                mapdl.cmsel("S", application_area)
+                mapdl.easel("S", "SALL")
+                mapdl.sfe("ALL", "", "", "", actual_force)
+                mapdl.allsel()
 
         _struct_config["load_cases"].append({
             "type": "bending",
@@ -296,6 +343,16 @@ def apply_torsion_load(
         application_points: 作用点，"front_suspension"（前悬架安装点）、"rear_suspension"（后悬架）
     """
     try:
+        mapdl = _mapdl()
+        mapdl.prep7()
+
+        dof = torsion_axis.upper()
+        if application_points:
+            mapdl.cmsel("S", application_points)
+            mapdl.desel("S", "NODE")
+            mapdl.f("ALL", f"M{dof}", torque_nm * 1000)  # N·m -> N·mm for MAPDL
+            mapdl.allsel()
+
         _struct_config["load_cases"].append({
             "type": "torsion",
             "torque_nm": torque_nm,
@@ -336,10 +393,23 @@ def apply_quasi_static_loads(
         vehicle_mass_kg: 整车质量（kg）
     """
     try:
+        mapdl = _mapdl()
+        mapdl.prep7()
+
         total_weight_n = vehicle_mass_kg * 9.81
         vertical_force = total_weight_n * vertical_acceleration_g
         lateral_force = total_weight_n * lateral_acceleration_g
         longitudinal_force = total_weight_n * longitudinal_acceleration_g
+
+        if longitudinal_force != 0:
+            mapdl.allsel()
+            mapdl.f("ALL", "FX", longitudinal_force)
+        if lateral_force != 0:
+            mapdl.allsel()
+            mapdl.f("ALL", "FY", lateral_force)
+        if vertical_force != 0:
+            mapdl.allsel()
+            mapdl.f("ALL", "FZ", vertical_force)
 
         load_data = {
             "scenario": scenario,

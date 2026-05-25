@@ -1348,19 +1348,21 @@ def _make_history_handler(agent_ref) -> "Callable":
     return _handle_history
 
 
+_COMMANDS_REGISTERED = False
+
+
 def _register_commands(agent) -> None:
     """
     向全局 command_registry 注册所有斜杠命令。
     需要引用 agent 实例的命令通过工厂函数（_make_*_handler）捕获。
 
     注意：此函数在每次 cli() 调用时执行（agent 实例创建之后）。
-    通过检查已注册命令防止重复注册。
+    通过专用标志位防止重复注册。
     """
-    from typing import Callable  # noqa: F401
-
-    # 防止重复注册（测试场景或 cli() 多次调用时保护）
-    if command_registry.get("/exit") is not None:
+    global _COMMANDS_REGISTERED
+    if _COMMANDS_REGISTERED:
         return
+    _COMMANDS_REGISTERED = True
 
     r = command_registry
 
