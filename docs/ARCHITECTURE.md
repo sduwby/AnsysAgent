@@ -102,7 +102,17 @@ SubAgent Workflow（OmAgent 风格 ToolLoopNode）
 - `StreamingToolLoopNode`：封装流式 LLM → 工具调用 → 状态回传的循环
 
 这层运行时目前先作为内部适配层使用，不要求安装外部 `omagent` 包，但已经把核心执行逻辑迁移为显式工作流，便于后续继续扩展成更复杂的 Node DAG、Hook、Trace 和异步调度。
+def _resolve_data_dir() -> Path:
+    custom_dir = os.getenv("ANSYS_AGENT_HOME", "").strip()
+    if custom_dir:
+        return Path(custom_dir).expanduser()
 
+    home_dir = Path.home() / ".AnsysAgent"
+    if _is_writable_dir(home_dir):
+        return home_dir
+
+    # 在受限环境（如测试沙箱）中，回退到当前工作目录
+    return Path.cwd() / ".ansysagent"
 ### 工具调用循环（210+ 工具）
 
 每个 Sub-Agent 在单次任务执行中可进行最多 30 轮工具调用，自主规划步骤：

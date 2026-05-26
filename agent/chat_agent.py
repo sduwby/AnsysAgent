@@ -38,6 +38,7 @@ from agent.omagent_runtime import (
 )
 from agent.role_manager import RoleManager
 from agent.mcp_manager import MCPManager
+from agent.chat_history_manager import get_chat_session, _generate_id, _format_timestamp
 from agent.sub_agents import (
     MaxwellAgent, IcepakAgent, FluentAgent, MapdlAgent,
     MotorCADAgent, OptimizationAgent, ReportingAgent,
@@ -142,6 +143,9 @@ _EXECUTION_HINTS = (
 
 class ChatAgent:
     def __init__(self):
+        self.agent_id: str = _generate_id()
+        self.created_at: str = _format_timestamp()
+        self._chat_session = get_chat_session()
         self._init_client()
         self.history: list[dict] = []
         self._knowledge_index_ready = False
@@ -632,8 +636,25 @@ class ChatAgent:
         )
         result = self._build_chat_workflow(_tools).run(run_context)
         if result.success:
+            self._save_chat_history(run_context)
             return result.output
         raise RuntimeError(result.error or "Main Agent workflow 执行失败")
+
+    def _save_chat_history(self, run_context: OmAgentContext) -> None:
+        """保存 ChatAgent 的对话历史到本地文件"""
+        try:
+            self._chat_session.save_chat_history(
+                history=self.history,
+                metadata={
+                    "agent_id": self.agent_id,
+                    "created_at": self.created_at,
+                    "task": run_context.task,
+                    "knowledge_context": getattr(run_context, 'knowledge_context', ''),
+                }
+            )
+            _log.info("已保存 ChatAgent 对话历史，共 %d 条消息", len(self.history))
+        except Exception as e:
+            _log.warning("保存对话历史失败: %s", e)
 
     def chat_stream(self, user_message: str):
         """
@@ -650,3 +671,4 @@ class ChatAgent:
         yield from self._build_chat_stream_workflow(_tools).stream(run_context)
         if run_context.error:
             raise RuntimeError(run_context.error or "Main Agent streaming workflow 执行失败")
+        self._save_chat_history(run_context)

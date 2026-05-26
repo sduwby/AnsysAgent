@@ -12,6 +12,7 @@ from openai import OpenAI
 from agent.llm_utils import is_fallback_error as _is_fallback_error
 from agent.logger import get_logger
 from agent.omagent_runtime import OmAgentContext, OmAgentWorkflow, PlanningNode, SummaryNode, ToolLoopNode
+from agent.chat_history_manager import get_chat_session, _generate_id, _format_timestamp
 
 _log = get_logger("sub_agent")
 
@@ -43,6 +44,8 @@ class SubAgentBase:
         tool_definitions: list[dict],
         tool_registry: dict[str, callable],
     ) -> None:
+        self.agent_id: str = _generate_id()
+        self.created_at: str = _format_timestamp()
         self.client = client
         self.model = model
         self.fallback_clients = fallback_clients
@@ -188,6 +191,28 @@ class SubAgentBase:
     # 主执行方法
     # ------------------------------------------------------------------
 
+    def _save_sub_agent_history(self, task: str, context: str, result: dict, run_context: OmAgentContext) -> None:
+        """保存 SubAgent 的对话历史到本地文件"""
+        try:
+            chat_session = get_chat_session()
+            chat_session.save_sub_agent_history(
+                agent_name=self.name,
+                agent_id=self.agent_id,
+                history=run_context.messages if hasattr(run_context, 'messages') else [],
+                steps=result.get("steps", []),
+                metadata={
+                    "agent_id": self.agent_id,
+                    "created_at": self.created_at,
+                    "task": task,
+                    "context": context,
+                    "agent_name": self.name,
+                },
+                result=result,
+            )
+            _log.info("[%s] 已保存 SubAgent 对话历史", self.name)
+        except Exception as e:
+            _log.warning("[%s] 保存 SubAgent 对话历史失败: %s", self.name, e)
+
     def execute(self, task: str, context: str = "", max_turns: int | None = None) -> dict:
         """
         运行工具调用循环，直到 LLM 返回文本（无工具调用）或达到 max_turns。
@@ -200,25 +225,29 @@ class SubAgentBase:
         )
         result = self.build_workflow(task=task, context=context, max_turns=max_turns).run(run_context)
         if result.success:
-            return {
+            result_dict = {
                 "success": True,
                 "agent": self.name,
                 "result": result.output,
                 "steps": result.steps,
                 "metadata": result.metadata,
             }
+            self._save_sub_agent_history(task, context, result_dict, run_context)
+            return result_dict
 
         if max_turns is None:
             failure = result.error or f"Sub-agent '{self.name}' 未完成任务"
         else:
             failure = result.error or f"Sub-agent '{self.name}' 已达到最大轮次 ({max_turns})，任务未完成"
-        return {
+        result_dict = {
             "success": False,
             "agent": self.name,
             "result": failure,
             "steps": result.steps,
             "metadata": result.metadata,
         }
+        self._save_sub_agent_history(task, context, result_dict, run_context)
+        return result_dict
 
     def run(self, task: str, context: str = "", max_turns: int | None = None) -> dict:
         """OmAgent 风格别名，便于 Dispatcher/Workflow 统一调用。"""

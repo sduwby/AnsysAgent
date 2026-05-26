@@ -489,3 +489,6 @@ AnsysAgent/
 - 运行时文件统一位于 `ANSYS_DATA_DIR`；如需自定义位置，请设置环境变量 `ANSYS_AGENT_HOME`
 - RAG 知识索引位于 `ANSYS_DATA_DIR/.rag/keyword_index.json`；向用户知识目录添加新文档后需删除旧 index 并重启 agent 触发重建
 - MCP 依赖为可选；未安装 `mcp` 或对应 MCP server 时会自动降级，不影响主流程
+
+## IN THE END
+- 本项目vibe coding占比极高，受个人时间与设备限制，无法进行详细调试，目前只调试出了基本流程与maxwell_agent的仿真功能,其他专业代理的仿真功能暂未调试，欢迎贡献代码
