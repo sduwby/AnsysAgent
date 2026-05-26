@@ -7,6 +7,9 @@ NVH（噪声、振动与声振粗糙度）专用工具：整合电磁力→结�
 from __future__ import annotations
 
 from tools.utils import _ok, _err, append_warnings, ok_message
+from agent.logger import get_logger
+
+_log = get_logger(__name__)
 
 _nvh_mech_app = None   # Mechanical 实例
 _nvh_mapdl_app = None  # MAPDL 实例
@@ -347,7 +350,9 @@ try:
                 "max_value": float(str(r.Maximum).split()[0]),
                 "unit": str(r.Maximum).split()[-1] if len(str(r.Maximum).split()) > 1 else "mm/s",
             })
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"警告：振动结果提取失败：{e}", file=sys.stderr)
             pass
     results["vibration_velocities"] = velocities
 
@@ -360,7 +365,9 @@ try:
                 "name": r.Name,
                 "max_value": float(str(r.Maximum).split()[0]),
             })
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"警告：加速度结果提取失败：{e}", file=sys.stderr)
             pass
     results["accelerations"] = accelerations
 
@@ -375,7 +382,9 @@ try:
                 "frequency_Hz": float(freq_str.split()[0]) if freq_str else None,
                 "max_deformation_mm": float(str(r.Maximum).split()[0]),
             })
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"警告：变形结果提取失败：{e}", file=sys.stderr)
             pass
     results["modal_deformations"] = deformations
 
@@ -395,7 +404,8 @@ print(json.dumps(results))
                     try:
                         parsed = json.loads(line)
                         break
-                    except Exception:
+                    except Exception as e:
+                        _log.warning("JSON 解析失败：%s", e)
                         pass
 
         if not parsed:

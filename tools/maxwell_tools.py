@@ -10,6 +10,9 @@ from typing import Any
 
 from tools.utils import _ok, _err, append_warnings, ensure_parent_dir, get_design_names, ok_message
 from tools.aedt_state import get_maxwell_app, set_maxwell_app, clear_maxwell_app
+from agent.logger import get_logger
+
+_log = get_logger(__name__)
 
 # PyAEDT 延迟导入，允许在未安装 Ansys 的环境中加载模块
 # 使用 aedt_state.py 的统一状态管理方案
@@ -151,14 +154,16 @@ def _apply_magnetization(app, magnet_name: str, angle_deg: float) -> bool:
                 coordinate_system="Global"
             )
             return True
-        except Exception:
+        except Exception as e:
+            _log.warning("assign_magnetization 标准接口失败：%s", e)
             pass
         
         try:
             # 尝试旧版本参数格式
             app.assign_magnetization(magnet_name, angle=angle_value)
             return True
-        except Exception:
+        except Exception as e:
+            _log.warning("assign_magnetization 旧版本接口失败：%s", e)
             pass
     
     # 回退到对象级设置
@@ -167,7 +172,8 @@ def _apply_magnetization(app, magnet_name: str, angle_deg: float) -> bool:
         if obj and hasattr(obj, "set_magnetization"):
             obj.set_magnetization(angle_value)
             return True
-    except Exception:
+    except Exception as e:
+        _log.warning("对象级 set_magnetization 失败：%s", e)
         pass
     
     # 最终回退：直接设置属性（兼容性最好但可靠性最低）
@@ -176,7 +182,8 @@ def _apply_magnetization(app, magnet_name: str, angle_deg: float) -> bool:
         if obj:
             setattr(obj, "magnetization_angle", angle_value)
             return True
-    except Exception:
+    except Exception as e:
+        _log.warning("直接设置 magnetization_angle 失败：%s", e)
         pass
     
     return False
@@ -208,7 +215,8 @@ def _configure_rotation_motion(app, rotor_name: str, airgap_name: str) -> bool:
                 origin=[0, 0, 0],
             )
             return True
-    except Exception:
+    except Exception as e:
+        _log.warning("create_band 标准接口失败：%s", e)
         pass
     
     # 策略 2: 手动创建 Band 区域并设置运动边界
@@ -233,7 +241,8 @@ def _configure_rotation_motion(app, rotor_name: str, airgap_name: str) -> bool:
                 positive_movement=True,
             )
             return True
-    except Exception:
+    except Exception as e:
+        _log.warning("手动创建 Band 失败：%s", e)
         pass
     
     # 策略 3: 简化版本（仅设置旋转，不创建 Band）
@@ -245,7 +254,8 @@ def _configure_rotation_motion(app, rotor_name: str, airgap_name: str) -> bool:
                 speed="3000rpm",  # 默认转速
             )
             return True
-    except Exception:
+    except Exception as e:
+        _log.warning("assign_rotation 简化接口失败：%s", e)
         pass
     
     return False
@@ -310,7 +320,8 @@ def connect_aedt(
         if existing is not None:
             try:
                 existing.close()
-            except Exception:
+            except Exception as e:
+                _log.warning("关闭现有 Maxwell 连接失败：%s", e)
                 pass
         
         kwargs = {

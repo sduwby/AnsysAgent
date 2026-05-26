@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 from tools.utils import _ok, _err, assign_power_sources
+from agent.logger import get_logger
+
+_log = get_logger(__name__)
 
 
 def _maxwell_app():
@@ -49,7 +52,8 @@ def _apply_temperature_feedback(maxwell_app, temperature_map: dict[str, float]) 
     existing_variables = set()
     try:
         existing_variables = set(variable_manager.variables.keys())
-    except Exception:
+    except Exception as e:
+        _log.warning("读取现有变量失败：%s", e)
         pass
 
     for obj_name, temp_c in temperature_map.items():
@@ -145,7 +149,8 @@ def link_maxwell_to_icepak(
                             stator_core = avg
                         else:
                             rotor_core = avg
-            except Exception:
+            except Exception as e:
+                _log.warning("按部件提取铁耗失败：%s", e)
                 pass
 
             if stator_core is None or rotor_core is None:
@@ -261,7 +266,8 @@ def run_em_thermal_iteration(
                         temp_value = float(temp)
                         temperature_map[obj_name] = temp_value
                         current_max_temp = max(current_max_temp or 0.0, temp_value)
-                except Exception:
+                except Exception as e:
+                    _log.warning("提取%s温度失败：%s", obj_name, e)
                     pass
 
             if current_max_temp is None:
@@ -365,12 +371,14 @@ def run_em_thermal_iteration(
         if icepak_app is not None:
             try:
                 clear_icepak_app()
-            except Exception:
+            except Exception as e:
+                _log.warning("清除 Icepak 应用失败：%s", e)
                 pass
         if maxwell_app is not None:
             try:
                 clear_maxwell_app()
-            except Exception:
+            except Exception as e:
+                _log.warning("清除 Maxwell 应用失败：%s", e)
                 pass
 
 
