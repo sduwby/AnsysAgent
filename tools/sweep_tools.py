@@ -6,7 +6,12 @@
 from __future__ import annotations
 
 from tools.maxwell_tools import _app, _get_model_state, _get_setup_names
-from tools.utils import _ok, _err, ok_message
+from tools.utils import (
+    _ok, _err, ok_message,
+    validate_string, validate_numeric, validate_positive_float,
+    validate_positive_int, validate_list,
+    ValidationError,
+)
 
 
 def _normalize_result_expression(result_expression: str) -> str:
@@ -186,6 +191,18 @@ def run_parametric_sweep(sweep_name: str = "") -> dict:
         sweep_name: 扫描名称，空字符串则运行全部扫描
     """
     try:
+        # 参数验证
+        if sweep_name:
+            try:
+                validate_string(
+                    sweep_name,
+                    max_length=100,
+                    allow_empty=False,
+                    field_name="sweep_name",
+                )
+            except ValidationError as e:
+                return _err(str(e))
+        
         app = _app()
         state = _get_model_state(app)
         sweep_state = state.setdefault("parametric_sweeps", {})

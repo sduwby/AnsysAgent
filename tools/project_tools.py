@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import os
 
-from tools.utils import _ok, _err, ensure_parent_dir, get_design_names, ok_message
+from tools.utils import (
+    _ok, _err, ensure_parent_dir, get_design_names, ok_message,
+    validate_file_path, validate_string, ValidationError,
+)
 
 
 def _app():
@@ -29,6 +32,24 @@ def save_project(file_path: str = "") -> dict:
         file_path: 另存路径（含 .aedt 扩展名），留空则原路径覆盖保存
     """
     try:
+        # 参数验证
+        if file_path:
+            try:
+                validate_string(
+                    file_path, 
+                    max_length=500,
+                    allow_empty=False,
+                    field_name="file_path",
+                )
+                validate_file_path(
+                    file_path,
+                    required=True,
+                    allowed_extensions=[".aedt", ".aedtz"],
+                    field_name="file_path",
+                )
+            except ValidationError as e:
+                return _err(str(e))
+        
         app = _app()
         if file_path:
             if not file_path.endswith(".aedt"):
@@ -56,12 +77,18 @@ def open_project(file_path: str) -> dict:
         file_path: 项目 .aedt 文件绝对路径
     """
     try:
-        if not file_path.strip():
-            return _err("file_path 不能为空")
-        if not file_path.lower().endswith(".aedt"):
-            return _err("只能打开 .aedt 项目文件")
-        if not os.path.exists(file_path):
-            return _err(f"找不到文件: {file_path}")
+        # 参数验证
+        try:
+            validate_file_path(
+                file_path,
+                required=True,
+                allowed_extensions=[".aedt", ".aedtz"],
+                must_exist=True,
+                field_name="file_path",
+            )
+        except ValidationError as e:
+            return _err(str(e))
+        
         app = _app()
         # 通过 AEDT 桌面 COM 接口打开项目
         app.odesktop.OpenProject(file_path)

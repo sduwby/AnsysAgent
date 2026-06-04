@@ -6,7 +6,11 @@
 
 from __future__ import annotations
 
-from tools.utils import _ok, _err, ok_message
+from tools.utils import (
+    _ok, _err, ok_message,
+    validate_list, validate_positive_float, validate_positive_int,
+    ValidationError,
+)
 
 
 def _app():
@@ -37,6 +41,19 @@ def setup_length_mesh(
         operation_name: 网格操作名称（相同名称会覆盖已有操作）
     """
     try:
+        # 参数验证
+        try:
+            validate_list(object_names, field_name="object_names")
+            if not object_names:
+                return _err("object_names 不能为空列表")
+            validate_positive_float(max_element_length, field_name="max_element_length")
+            if max_element_length > 100:
+                return _err("max_element_length 不应超过 100mm")
+            if max_elements is not None:
+                validate_positive_int(max_elements, field_name="max_elements")
+        except ValidationError as e:
+            return _err(str(e))
+        
         app = _app()
         app.mesh.assign_length_mesh(
             assignment=object_names,
@@ -84,6 +101,22 @@ def setup_skin_depth_mesh(
         operation_name: 网格操作名称
     """
     try:
+        # 参数验证
+        try:
+            validate_list(object_names, field_name="object_names")
+            if not object_names:
+                return _err("object_names 不能为空列表")
+            validate_positive_float(skin_depth_mm, field_name="skin_depth_mm")
+            validate_positive_float(max_triangle_length_mm, field_name="max_triangle_length_mm")
+            validate_positive_int(num_layers, field_name="num_layers")
+            if num_layers > 10:
+                return _err("num_layers 不应超过 10（会影响求解性能）")
+            # 集肤深度与三角边长的比例检查
+            if max_triangle_length_mm > skin_depth_mm * 10:
+                return _err("max_triangle_length_mm 不应超过 skin_depth_mm 的 10倍")
+        except ValidationError as e:
+            return _err(str(e))
+        
         app = _app()
         app.mesh.assign_skin_depth(
             assignment=object_names,
@@ -124,6 +157,15 @@ def setup_surface_mesh(
         operation_name: 网格操作名称
     """
     try:
+        # 参数验证
+        try:
+            validate_list(object_names, field_name="object_names")
+            if not object_names:
+                return _err("object_names 不能为空列表")
+            validate_numeric(surface_quality, min_val=1, max_val=10, field_name="surface_quality")
+        except ValidationError as e:
+            return _err(str(e))
+        
         app = _app()
         quality = max(1, min(10, surface_quality))
         app.mesh.assign_surface_mesh(

@@ -1,48 +1,40 @@
-# Ansys PyAEDT - Electronics Desktop Python interface
+# ============================================================
+# AnsysAgent - Dependencies
+# ============================================================
+# This file is generated from pyproject.toml.
+# For development: pip install -e ".[ansys,rag,mcp,dev]"
+# For production:  pip install -e .
+# ============================================================
+
+# --- Core ---
+openai>=1.30.0
+python-dotenv>=1.0.0
+rich>=13.0.0
+click>=8.1.0
+tiktoken>=0.7.0
+prompt_toolkit>=3.0.0
+httpx>=0.27.0
+
+# --- Ansys SDK (optional: pip install ".[ansys]") ---
 pyaedt>=0.9.0
-
-# Ansys PyFluent - Fluent CFD Python interface
 ansys-fluent-core>=0.20.0
-
-# Ansys PyMotorCAD - Motor-CAD motor design (EM/thermal/NVH)
 ansys-motorcad-core>=0.7.0
-
-# Ansys PyMAPDL - MAPDL structural, thermal stress, NVH harmonic analysis
 ansys-mapdl-core>=0.68.0
-
-# Ansys PyDyna - LS-DYNA explicit dynamics Python interface (crash simulation)
 ansys-dyna-core>=0.8.0
-
-# Ansys PyDPF-Post - Simulation post-processing
 ansys-dpf-post>=0.7.0
-
-# Ansys PyDynamicReporting - Automated report generation (HTML/PDF)
 ansys-dynamicreporting-core>=0.8.0
 
-# LLM client (OpenAI compatible interface)
-openai>=1.30.0
-
-# Token counting for context compression
-tiktoken>=0.7.0
-
-# CLI framework
-click>=8.1.0
-
-# Utility libraries
-python-dotenv>=1.0.0
-rich>=13.0.0          # Terminal formatting
-prompt_toolkit>=3.0.0  # Command line input enhancement
-
-# PDF text extraction (RAG knowledge indexing optional dependency)
+# --- RAG (optional: pip install ".[rag]") ---
 pypdf>=4.2.0
-
-# Vector embedding and semantic search (RAG enhancement)
 sentence-transformers>=2.7.0
 numpy>=1.26.0
 
-# MCP (Model Context Protocol) client SDK
+# --- MCP (optional: pip install ".[mcp]") ---
 mcp>=1.0.0
-
-# Default built-in MCP server: DuckDuckGo web search (free, no API Key required)
 duckduckgo-mcp-server>=0.1.0
+
+# --- Other ---
 python-docx>=1.1.0
+
+# --- Dev (optional: pip install ".[dev]") ---
+-e .

@@ -166,4 +166,254 @@ def append_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, An
     return result
 
 
+# ---------------------------------------------------------------------------
+# Parameter Validation Utilities
+# ---------------------------------------------------------------------------
+
+class ValidationError(Exception):
+    """参数验证失败异常。"""
+    pass
+
+
+def validate_file_path(
+    path: str | os.PathLike[str] | None,
+    *,
+    required: bool = False,
+    allowed_extensions: list[str] | None = None,
+    must_exist: bool = False,
+    field_name: str = "path",
+) -> None:
+    """
+    验证文件路径参数。
+
+    Args:
+        path: 文件路径
+        required: 是否必填（如果为 True，None 会抛出异常）
+        allowed_extensions: 允许的扩展名集合（不区分大小写）
+        must_exist: 是否检查路径是否存在
+        field_name: 字段名称（用于错误消息）
+
+    Raises:
+        ValidationError: 验证失败时抛出
+    """
+    if path is None:
+        if required:
+            raise ValidationError(f"{field_name} 不能为空")
+        return
+
+    path_str = str(path)
+    
+    # 检查空字符串
+    if not path_str.strip():
+        raise ValidationError(f"{field_name} 不能为空字符串")
+
+    # 检查路径遍历攻击
+    if ".." in path_str:
+        raise ValidationError(f"{field_name} 不允许包含 '..'")
+    
+    # 检查可疑字符（防止命令注入）
+    if platform.system() == "Windows":
+        # Windows 下检查危险字符
+        dangerous_chars = [';', '|', '&', '`', '
+, '(', ')']
+        for ch in dangerous_chars:
+            if ch in path_str:
+                raise ValidationError(f"{field_name} 包含非法字符: {ch}")
+    else:
+        # Unix 下检查危险字符
+        dangerous_chars = [';', '|', '&', '`', '
+, '(', ')', '\n']
+        for ch in dangerous_chars:
+            if ch in path_str:
+                raise ValidationError(f"{field_name} 包含非法字符: {ch}")
+
+    # 检查扩展名
+    if allowed_extensions is not None:
+        from pathlib import Path
+        ext = Path(path_str).suffix.lower()
+        if ext not in {e.lower() for e in allowed_extensions}:
+            raise ValidationError(
+                f"{field_name} 不支持的文件扩展名: {ext}，"
+                f"允许的扩展名: {', '.join(sorted(allowed_extensions))}"
+            )
+
+    # 检查路径是否存在
+    if must_exist:
+        from pathlib import Path
+        p = Path(path_str).resolve()
+        if not p.exists():
+            raise ValidationError(f"{field_name} 路径不存在: {path_str}")
+
+
+def validate_numeric(
+    value: Any,
+    *,
+    min_val: float | None = None,
+    max_val: float | None = None,
+    allow_zero: bool = True,
+    allow_negative: bool = True,
+    field_name: str = "value",
+) -> float:
+    """
+    验证数值参数。
+
+    Args:
+        value: 待验证的数值
+        min_val: 最小值（包含）
+        max_val: 最大值（包含）
+        allow_zero: 是否允许零值
+        allow_negative: 是否允许负数
+        field_name: 字段名称（用于错误消息）
+
+    Returns:
+        转换后的浮点数值
+
+    Raises:
+        ValidationError: 验证失败时抛出
+    """
+    # 类型检查
+    if not isinstance(value, (int, float)):
+        raise ValidationError(
+            f"{field_name} 必须是数值类型，收到: {type(value).__name__}"
+        )
+    
+    # NaN 检查
+    import math
+    if math.isnan(value) or math.isinf(value):
+        raise ValidationError(f"{field_name} 不能是 NaN 或无穷大")
+
+    val = float(value)
+
+    # 负数检查
+    if not allow_negative and val < 0:
+        raise ValidationError(f"{field_name} 不能为负数")
+
+    # 零值检查
+    if not allow_zero and val == 0:
+        raise ValidationError(f"{field_name} 不能为零")
+
+    # 范围检查
+    if min_val is not None and val < min_val:
+        raise ValidationError(
+            f"{field_name} 不能小于 {min_val}，当前值: {val}"
+        )
+    
+    if max_val is not None and val > max_val:
+        raise ValidationError(
+            f"{field_name} 不能大于 {max_val}，当前值: {val}"
+        )
+
+    return val
+
+
+def validate_string(
+    value: str,
+    *,
+    max_length: int | None = None,
+    min_length: int = 0,
+    allow_empty: bool = True,
+    pattern: str | None = None,
+    field_name: str = "value",
+) -> str:
+    """
+    验证字符串参数。
+
+    Args:
+        value: 待验证的字符串
+        max_length: 最大长度
+        min_length: 最小长度
+        allow_empty: 是否允许空字符串
+        pattern: 正则表达式模式（用于格式校验）
+        field_name: 字段名称（用于错误消息）
+
+    Returns:
+        验证后的字符串
+
+    Raises:
+        ValidationError: 验证失败时抛出
+    """
+    if not isinstance(value, str):
+        raise ValidationError(
+            f"{field_name} 必须是字符串类型，收到: {type(value).__name__}"
+        )
+
+    if not allow_empty and not value.strip():
+        raise ValidationError(f"{field_name} 不能为空字符串")
+
+    if len(value) < min_length:
+        raise ValidationError(
+            f"{field_name} 长度不能小于 {min_length}，当前长度: {len(value)}"
+        )
+
+    if max_length is not None and len(value) > max_length:
+        raise ValidationError(
+            f"{field_name} 长度不能超过 {max_length}，当前长度: {len(value)}"
+        )
+
+    if pattern is not None:
+        import re
+        if not re.match(pattern, value):
+            raise ValidationError(
+                f"{field_name} 格式不正确，需要匹配模式: {pattern}"
+            )
+
+    return value
+
+
+def validate_positive_float(value: Any, field_name: str = "value") -> float:
+    """验证正浮点数（快捷方法）"""
+    return validate_numeric(
+        value,
+        min_val=0.0,
+        allow_zero=False,
+        allow_negative=False,
+        field_name=field_name,
+    )
+
+
+def validate_non_negative_float(value: Any, field_name: str = "value") -> float:
+    """验证非负浮点数（快捷方法）"""
+    return validate_numeric(
+        value,
+        min_val=0.0,
+        allow_negative=False,
+        field_name=field_name,
+    )
+
+
+def validate_positive_int(value: Any, field_name: str = "value") -> int:
+    """验证正整数（快捷方法）"""
+    if not isinstance(value, int):
+        try:
+            value = int(float(value))  # 支持 "3.0" 这样的字符串
+        except (ValueError, TypeError):
+            raise ValidationError(
+                f"{field_name} 必须是整数，收到: {type(value).__name__}"
+            )
+    if value <= 0:
+        raise ValidationError(f"{field_name} 必须是正整数，当前值: {value}")
+    return value
+
+
+def validate_list(value: Any, *, field_name: str = "value") -> list:
+    """验证列表参数"""
+    if not isinstance(value, (list, tuple)):
+        raise ValidationError(
+            f"{field_name} 必须是列表类型，收到: {type(value).__name__}"
+        )
+    return list(value)
+
+
+def validate_range(
+    min_val: float,
+    max_val: float,
+    *,
+    field_name: str = "range",
+) -> tuple[float, float]:
+    """验证范围参数（min < max）"""
+    if min_val >= max_val:
+        raise ValidationError(
+            f"{field_name} 的最小值 ({min_val}) 必须小于最大值 ({max_val})"
+        )
+    return (min_val, max_val)
 
