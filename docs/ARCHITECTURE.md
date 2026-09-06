@@ -264,20 +264,26 @@ result = workflow.run(context)
 
 ### 6. RAG 系统（`rag/`）
 
-基于关键词的本地知识检索，非向量检索。
+LlamaIndex 化 RAG 2.0：向量（Chroma 本地持久化 + docstore 增量）+ 关键词快照双路，可选 SiliconFlow 重排；
+嵌入不可用或依赖缺失时自动降级为关键词模式。详细设计见 `docs/rag_upgrade/`。
 
 ```
-build_index()                    # 扫描文档 → 解析 → chunk → 存 JSON
-  └── rag/ingest.py              # 支持 PDF/PPTX/ipynb/py/md/txt/rst
+build_index()                    # 扫描文档 → 抽取 → SentenceSplitter 分块
+  ├── rag/storage.py             # IngestionPipeline(UPSERTS_AND_DELETE) → Chroma + docstore（增量）
+  └── rag/parser.py              # 旧 llama_index 缺失时回退 rag/ingest.py 旧 chunk 路径
+  重建 keyword_index.json（兼容快照，供关键词检索/计数）
 
-search_index(query, top_k=4)     # BM25-like 关键词匹配
-  └── rag/retriever.py
+search_index(query, top_k=4)     # vector / keyword / hybrid（默认）
+  ├── rag/retriever.py           # 向量召回（LlamaIndex）与关键词打分
+  ├── rag/embedder.py            # 现有嵌入通道 → llama_index BaseEmbedding
+  └── rag/reranker.py            # 可选 SiliconFlow 重排
 
 触发条件（chat_agent.py）：
   用户消息包含 _KNOWLEDGE_HINTS 中的词 → 检索 → 注入 system 消息
 ```
 
-索引文件：`ANSYS_DATA_DIR/.rag/keyword_index.json`（延迟构建，存在即复用）
+索引文件：`ANSYS_DATA_DIR/.rag/` 下 `keyword_index.json`（快照）、`docstore.json`（增量登记）、`chroma/`（向量）。
+延迟构建，存在即复用；schema 变化或删除文件后自动重建。
 
 ### 7. LLM 配置层（`agent/config_manager.py`）
 

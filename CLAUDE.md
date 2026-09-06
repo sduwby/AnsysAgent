@@ -101,7 +101,12 @@ Config lives in `agent/config_manager.py`. The active provider/model is read fro
 
 ### RAG
 
-`rag/` uses BM25-style keyword matching (no embeddings). `build_index()` scans `docs/api/` and `knowledge/` at startup and writes `keyword_index.json`. Retrieval is triggered when the user message contains words from `_KNOWLEDGE_HINTS` in `chat_agent.py`. Delete `keyword_index.json` and restart to force a rebuild after adding docs.
+`rag/` 为 LlamaIndex 化 RAG 2.0（向量：Chroma + docstore 增量；关键词：快照内存检索；可选 SiliconFlow
+重排）。对外薄壳 API（`build_index/search_index/load_index` 及返回结构）保持兼容，能力不足时自动降级为关键词
+模式。`build_index()` 扫描 `docs/api/` 与 `knowledge/`（含用户目录），增量构建到 `.rag/chroma` 与
+`.rag/docstore.json`，并把兼容快照写入 `.rag/keyword_index.json`。检索由 `chat_agent` 的触发词驱动。
+详见 `docs/rag_upgrade/`（总设计与分模块文档）；若要重建索引，删除 `.rag` 下 `keyword_index.json`、
+`docstore.json`、`chroma/`（或删除整个 `.rag`）后重启。
 
 ### Skills
 

@@ -214,15 +214,13 @@ def validate_file_path(
     # 检查可疑字符（防止命令注入）
     if platform.system() == "Windows":
         # Windows 下检查危险字符
-        dangerous_chars = [';', '|', '&', '`', '
-, '(', ')']
+        dangerous_chars = [';', '|', '&', '`', '\n', '(', ')']
         for ch in dangerous_chars:
             if ch in path_str:
                 raise ValidationError(f"{field_name} 包含非法字符: {ch}")
     else:
         # Unix 下检查危险字符
-        dangerous_chars = [';', '|', '&', '`', '
-, '(', ')', '\n']
+        dangerous_chars = [';', '|', '&', '`', '(', ')', '\n']
         for ch in dangerous_chars:
             if ch in path_str:
                 raise ValidationError(f"{field_name} 包含非法字符: {ch}")

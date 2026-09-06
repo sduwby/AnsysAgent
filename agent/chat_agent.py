@@ -28,7 +28,7 @@ from agent.memory_manager import MemoryManager
 from agent.prompt import SYSTEM_PROMPT
 from agent.tool_definitions import MAIN_TOOL_DEFINITIONS, MAIN_TOOL_REGISTRY, DELEGATE_TOOL_DEFINITION, build_use_skill_definition
 from agent.logger import get_logger
-from agent import dispatcherev
+from agent import dispatcher
 from agent.omagent_runtime import (
     FunctionNode,
     OmAgentContext,

@@ -28,6 +28,9 @@ ansys-dynamicreporting-core>=0.8.0
 pypdf>=4.2.0
 sentence-transformers>=2.7.0
 numpy>=1.26.0
+llama-index-core>=0.12,<1.0
+llama-index-vector-stores-chroma>=0.4,<1.0
+chromadb>=0.5,<2.0
 
 # --- MCP (optional: pip install ".[mcp]") ---
 mcp>=1.0.0

@@ -30,6 +30,34 @@ SILICONFLOW_EMBEDDING_MODEL = os.environ.get("SILICONFLOW_EMBEDDING_MODEL", "BAA
 HYBRID_VECTOR_WEIGHT = float(os.environ.get("RAG_HYBRID_VECTOR_WEIGHT", "0.6"))
 HYBRID_KEYWORD_WEIGHT = float(os.environ.get("RAG_HYBRID_KEYWORD_WEIGHT", "0.4"))
 
+# ------------------------------------------------------------
+# LlamaIndex 内核配置（RAG 2.0，schema 版本用于旧缓存自动迁移）
+# ------------------------------------------------------------
+
+# 快照 schema/引擎版本；与 keyword_index.json 中的 schema_version 不匹配时触发一次自动重建
+RAG_SCHEMA_VERSION = os.environ.get("RAG_SCHEMA_VERSION", "llamaindex-1")
+
+# 强制走纯关键词模式（排障开关）
+RAG_DISABLE_VECTOR = os.environ.get("RAG_DISABLE_VECTOR", "") == "1"
+
+# Chroma 本地持久化目录与 collection
+DEFAULT_CHROMA_DIR = DEFAULT_INDEX_DIR / "chroma"
+DEFAULT_DOCSTORE_PATH = DEFAULT_INDEX_DIR / "docstore.json"
+RAG_COLLECTION_NAME = os.environ.get("RAG_COLLECTION_NAME", "ansys_knowledge")
+
+# 分块参数（单位：token，SentenceSplitter 的 chunk_size / chunk_overlap）
+RAG_CHUNK_SIZE = int(os.environ.get("RAG_CHUNK_SIZE", "512"))
+RAG_CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", "50"))
+
+# 召回池倍率：每路先取 top_k × N 个候选再做融合/重排/截断
+RAG_TOP_K_CANDIDATES = int(os.environ.get("RAG_TOP_K_CANDIDATES", "2"))
+
+# 可选重排（SiliconFlow /rerank）。模型为空 = 关闭。
+RAG_RERANK_MODEL = os.environ.get("RAG_RERANK_MODEL", "")
+RAG_RERANK_BASE_URL = os.environ.get(
+    "RAG_RERANK_BASE_URL", "https://api.siliconflow.cn/v1/rerank"
+)
+
 USER_KNOWLEDGE_DIR = ANSYS_DATA_DIR / "knowledge"
 USER_OFFICIAL_DOC_DIR = USER_KNOWLEDGE_DIR / "official"
 USER_INTERNAL_DOC_DIR = USER_KNOWLEDGE_DIR / "internal"

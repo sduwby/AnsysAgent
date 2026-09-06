@@ -1,25 +1,42 @@
-"""Local retrieval with vector search support."""
+"""检索层（RAG 2.0）。
+
+- keyword：沿用本项目成熟的轻量字符打分（可离线、结果可预期），输入 keyword_index.json 快照 chunks；
+- vector：LlamaIndex VectorIndexRetriever + Chroma（stores_text=True，查询直接还原 TextNode）；
+- hybrid 融合 / 可选重排 由 service.search_index 编排。
+
+vector 相关依赖全部可导入保护：不具备条件时调用方降级为 keyword。
+"""
 
 from __future__ import annotations
 
+import logging
 import math
 import re
+from typing import Any
 
-from rag.config import EMBEDDING_PROVIDER, SILICONFLOW_EMBEDDING_MODEL, HYBRID_VECTOR_WEIGHT, HYBRID_KEYWORD_WEIGHT
-from rag.config_manager import get_provider_config, read_env_file
+from rag.config import (
+    DEFAULT_INDEX_PATH,
+    HYBRID_KEYWORD_WEIGHT,
+    HYBRID_VECTOR_WEIGHT,
+)
+from rag.embedder import ConfigEmbedding, available as embedder_available
+from rag.storage import available as storage_available, get_vector_store
+
+_log = logging.getLogger(__name__)
 
 try:
-    import numpy as np
-    _NUMPY_AVAILABLE = True
-except ImportError:
-    _NUMPY_AVAILABLE = False
+    from llama_index.core import Settings, VectorStoreIndex
+    from llama_index.core.retrievers import VectorIndexRetriever
+    from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 
-try:
-    from rag.ingest import get_embedding_model, compute_embeddings_siliconflow, compute_embeddings_api
     _VECTOR_AVAILABLE = True
-except ImportError:
+except Exception:  # pragma: no cover - 缺依赖保护
     _VECTOR_AVAILABLE = False
 
+
+# --------------------------------------------------------------------------
+# 关键词打分（保留旧算法，行为与旧版完全一致）
+# --------------------------------------------------------------------------
 
 def tokenize_query(text: str) -> list[str]:
     ascii_words = re.findall(r"[A-Za-z0-9_./:-]+", text.lower())
@@ -49,150 +66,152 @@ def score_chunk_keyword(query: str, query_tokens: list[str], chunk: dict) -> flo
     return score
 
 
-def compute_cosine_similarity(vec1, vec2) -> float:
-    if _NUMPY_AVAILABLE:
-        a = np.asarray(vec1, dtype=np.float64).flatten()
-        b = np.asarray(vec2, dtype=np.float64).flatten()
-        dot = np.dot(a, b)
-        norm_a = np.linalg.norm(a)
-        norm_b = np.linalg.norm(b)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return float(dot / (norm_a * norm_b))
-    else:
-        dot = sum(x * y for x, y in zip(vec1, vec2))
-        norm_a = math.sqrt(sum(x * x for x in vec1))
-        norm_b = math.sqrt(sum(x * x for x in vec2))
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return dot / (norm_a * norm_b)
-
-
-def _encode_query(query: str, embedding_provider: str = "") -> list[float]:
-    provider = embedding_provider or EMBEDDING_PROVIDER
-
-    if provider == "siliconflow":
-        results = compute_embeddings_siliconflow([query], model=SILICONFLOW_EMBEDDING_MODEL)
-        return results[0]
-    elif provider == "local":
-        if not _VECTOR_AVAILABLE:
-            raise ImportError("本地嵌入模型不可用")
-        model = get_embedding_model()
-        embedding = model.encode(query, convert_to_numpy=True)
-        return embedding.tolist()
-    else:
-        # 自定义提供商
-        provider_config = get_provider_config(provider)
-        if not provider_config:
-            raise ValueError(f"未知提供商: {provider}")
-        
-        env = read_env_file()
-        prefix = f"CUSTOM_PROVIDER_{provider.upper()}"
-        api_key = env.get(f"{prefix}_API_KEY", "")
-        base_url = env.get(f"{prefix}_BASE_URL", "")
-        model = env.get(f"{prefix}_MODEL", "default-model")
-        
-        if not api_key:
-            raise ValueError(f"提供商 {provider} 的 API Key 未配置")
-        if not base_url:
-            raise ValueError(f"提供商 {provider} 的基础 URL 未配置")
-        
-        results = compute_embeddings_api([query], api_key, base_url, model)
-        return results[0]
-
-
-def retrieve_vector(index_data: dict, query: str, top_k: int = 5, source_type: str = "") -> list[dict]:
-    if not _NUMPY_AVAILABLE and not _VECTOR_AVAILABLE:
-        return []
-
-    try:
-        query_embedding = _encode_query(query, index_data.get("embedding_provider", ""))
-    except Exception:
-        return []
-
-    candidates: list[dict] = []
-    for chunk in index_data.get("chunks", []):
-        if source_type and chunk.get("source_type") != source_type:
-            continue
-
-        embedding = chunk.get("embedding")
-        if embedding is None:
-            continue
-
-        similarity = compute_cosine_similarity(query_embedding, embedding)
-
-        if similarity > 0.1:
-            snippet = chunk["content"][:800].replace("\n", " ").strip()
-            candidates.append({
-                "id": chunk["id"],
-                "path": chunk["path"],
-                "title": chunk["title"],
-                "source_type": chunk["source_type"],
-                "chunk_index": chunk["chunk_index"],
-                "score": round(float(similarity), 4),
-                "snippet": snippet,
-            })
-
-    candidates.sort(key=lambda item: item["score"], reverse=True)
-    return candidates[:top_k]
-
-
-def retrieve_keyword(index_data: dict, query: str, top_k: int = 5, source_type: str = "") -> list[dict]:
+def keyword_retrieve(
+    chunks: list[dict],
+    query: str,
+    top_k: int = 5,
+    source_type: str = "",
+) -> list[dict]:
+    """在快照 chunk 列表上做关键词检索，返回兼容结构 item（含 content 供融合/重排）。"""
     query_tokens = tokenize_query(query)
     candidates: list[dict] = []
-    for chunk in index_data.get("chunks", []):
+    for chunk in chunks:
         if source_type and chunk.get("source_type") != source_type:
             continue
         score = score_chunk_keyword(query, query_tokens, chunk)
         if score <= 0:
             continue
-        snippet = chunk["content"][:800].replace("\n", " ").strip()
-        candidates.append({
-            "id": chunk["id"],
-            "path": chunk["path"],
-            "title": chunk["title"],
-            "source_type": chunk["source_type"],
-            "chunk_index": chunk["chunk_index"],
-            "score": round(score, 4),
-            "snippet": snippet,
-        })
+        candidates.append(
+            {
+                "id": chunk.get("id", ""),
+                "path": chunk.get("path", ""),
+                "title": chunk.get("title", ""),
+                "source_type": chunk.get("source_type", ""),
+                "chunk_index": chunk.get("chunk_index", 0),
+                "score": round(score, 4),
+                "content": chunk.get("content", ""),
+            }
+        )
     candidates.sort(key=lambda item: item["score"], reverse=True)
     return candidates[:top_k]
 
 
-def retrieve(
-    index_data: dict,
+# --------------------------------------------------------------------------
+# 向量检索（LlamaIndex + Chroma）
+# --------------------------------------------------------------------------
+
+_vector_index_cache: dict[str, Any] = {}  # key=index_path → VectorStoreIndex
+
+
+def vector_available() -> bool:
+    """llama_index 检索类 + chroma 存储集成是否都可用。"""
+    return _VECTOR_AVAILABLE and storage_available() and embedder_available()
+
+
+def _get_index(index_path: str = str(DEFAULT_INDEX_PATH), embed_model: Any = None) -> Any:
+    global _vector_index_cache
+    key = str(index_path)
+    if key not in _vector_index_cache:
+        vector_store = get_vector_store()
+        _vector_index_cache[key] = VectorStoreIndex.from_vector_store(
+            vector_store=vector_store,
+            # 显式传 embed_model：避免 from_vector_store 回落到 Settings 默认 OpenAI 嵌入
+            embed_model=embed_model,
+        )
+    return _vector_index_cache[key]
+
+
+def invalidate_vector_cache() -> None:
+    """清空向量索引缓存（build_index 或 schema 迁移后调用）。"""
+    global _vector_index_cache
+    _vector_index_cache = {}
+
+
+def vector_retrieve(
     query: str,
     top_k: int = 5,
     source_type: str = "",
-    retrieval_mode: str = "hybrid",
-    vector_weight: float | None = None,
-    keyword_weight: float | None = None,
+    provider: str = "",
+    model: str = "",
+    index_path: str = str(DEFAULT_INDEX_PATH),
 ) -> list[dict]:
-    if retrieval_mode == "vector":
-        return retrieve_vector(index_data, query, top_k, source_type)
-    elif retrieval_mode == "keyword":
-        return retrieve_keyword(index_data, query, top_k, source_type)
-    else:
-        vw = vector_weight if vector_weight is not None else HYBRID_VECTOR_WEIGHT
-        kw = keyword_weight if keyword_weight is not None else HYBRID_KEYWORD_WEIGHT
+    """向量召回 top_k，返回 item（含 content）。失败返回 [] 不抛（由调用方降级）。"""
+    if not vector_available():
+        return []
+    try:
+        embed_model = ConfigEmbedding(provider=provider, model=model)
+        # 显式绑定全局 Settings.embed_model：llama_index 内部（VectorStoreIndex.__init__ /
+        # QueryBundle 编码）仍会读取 Settings 默认嵌入；与本路所用编码保持一致可避免回落
+        # 到 OpenAI 默认导致 ImportError。
+        Settings.embed_model = embed_model
+        filters = (
+            MetadataFilters(
+                filters=[ExactMatchFilter(key="source_type", value=source_type)]
+            )
+            if source_type
+            else None
+        )
+        retriever = VectorIndexRetriever(
+            index=_get_index(index_path, embed_model=embed_model),
+            similarity_top_k=top_k,
+            filters=filters,
+            embed_model=embed_model,
+        )
+        nodes_with_score = retriever.retrieve(query)
+    except Exception as exc:
+        _log.warning("向量检索失败，本路跳过: %s", exc)
+        return []
 
-        vector_results = retrieve_vector(index_data, query, top_k * 2, source_type)
-        keyword_results = retrieve_keyword(index_data, query, top_k * 2, source_type)
+    items: list[dict] = []
+    for node_with_score in nodes_with_score:
+        node = node_with_score.node
+        meta = getattr(node, "metadata", {}) or {}
+        content = node.get_content()
+        if not content:
+            continue
+        items.append(
+            {
+                "id": str(node.node_id),
+                "path": meta.get("path", ""),
+                "title": meta.get("title", ""),
+                "source_type": meta.get("source_type", ""),
+                "chunk_index": int(meta.get("chunk_index", 0) or 0),
+                "score": round(float(node_with_score.score or 0.0), 4),
+                "content": content,
+            }
+        )
+    return items
 
-        merged = {}
-        for result in vector_results:
-            merged[result["id"]] = {"score": result["score"] * vw, "data": result}
 
-        for result in keyword_results:
-            if result["id"] in merged:
-                merged[result["id"]]["score"] += result["score"] * kw
-            else:
-                merged[result["id"]] = {"score": result["score"] * kw, "data": result}
+# --------------------------------------------------------------------------
+# 融合与输出（service 使用）
+# --------------------------------------------------------------------------
 
-        final_results = [
-            {**item["data"], "score": round(item["score"], 4)}
-            for item in sorted(merged.values(), key=lambda x: x["score"], reverse=True)
-        ]
-
-        return final_results[:top_k]
+def merge_hybrid(
+    vector_items: list[dict],
+    keyword_items: list[dict],
+    top_k: int = 5,
+    vector_weight: float = HYBRID_VECTOR_WEIGHT,
+    keyword_weight: float = HYBRID_KEYWORD_WEIGHT,
+) -> list[dict]:
+    """按旧语义双路融合：同 id 加权相加后取 top_k。"""
+    merged: dict[str, dict] = {}
+    for item in vector_items:
+        merged[item["id"]] = {
+            "item": item,
+            "score": float(item["score"]) * vector_weight,
+        }
+    for item in keyword_items:
+        if item["id"] in merged:
+            merged[item["id"]]["score"] += float(item["score"]) * keyword_weight
+        else:
+            merged[item["id"]] = {
+                "item": item,
+                "score": float(item["score"]) * keyword_weight,
+            }
+    final = sorted(
+        (entry for entry in merged.values() if entry["score"] > 0),
+        key=lambda entry: entry["score"],
+        reverse=True,
+    )
+    return [dict(entry["item"], score=round(entry["score"], 4)) for entry in final[:top_k]]
